@@ -52,11 +52,6 @@ Epusdt
 ## 已适配系统插件
 - 独角数卡[插件地址](plugins/dujiaoka)
 
-
-## 🔥推荐服务器 
-- （🇺🇸美国免备案vps，配置2核2G仅需`20.98$`≈`145RMB`一年/支持支付宝付款）[👉🏻点我直达](https://my.racknerd.com/aff.php?aff=2745&pid=681)
-- （🇺🇸美国至中国最快的云服务器，三网精品CN2，最低仅需`3.5$/月`/支持Paypal/USDT/支付宝付款）[👉🏻点我直达](https://www.vmrack.net/?ref_code=5cxGLUcTZhH)
-
 ## 加入交流/意见反馈
 - `Epusdt`频道[https://t.me/epusdt](https://t.me/epusdt)
 - `Epusdt`交流群组[https://t.me/epusdt_group](https://t.me/epusdt_group)
@@ -76,24 +71,10 @@ Epusdt
 ### 流程图：
 ![Implementation principle](wiki/img/implementation_principle.jpg)
 
-## 打赏
-如果该项目对您有所帮助，希望可以请我喝一杯咖啡☕️
+
+
+
+## 声明      
 ```
-Usdt(trc20)打赏地址: TNEns8t9jbWENbStkQdVQtHMGpbsYsQjZK
-```
-<img src="wiki/img/usdt_thanks.jpeg" width = "300" height = "400" alt="usdt扫码打赏"/>
-
-
-
-
-## 声明
-`Epusdt`为开源的产品，仅用于学习交流使用！       
-不可用于任何违反中华人民共和国(含台湾省)或使用者所在地区法律法规的用途。           
-因为作者即本人仅完成代码的开发和开源活动(开源即任何人都可以下载使用或修改分发)，从未参与用户的任何运营和盈利活动。       
-且不知晓用户后续将程序源代码用于何种用途，故用户使用过程中所带来的任何法律责任即由用户自己承担。            
-```
-！！！Warning！！！
-项目中所涉及区块链代币均为学习用途，作者并不赞成区块链所繁衍出代币的金融属性
-亦不鼓励和支持任何"挖矿"，"炒币"，"虚拟币ICO"等非法行为
-虚拟币市场行为不受监管要求和控制，投资交易需谨慎，仅供学习区块链知识
+本项目仅供学习与技术交流使用，用户在使用过程中需自行遵守所在地法律法规。由于涉及加密资产及资金安全，用户应自行审查相关代码与风险。加密资产属于高风险新兴资产（包括稳定币），其价值可能波动甚至归零，GMwallet不对任何资产或使用结果作出保证。本内容不构成任何投资、税务、法律或金融建议，仅供教育用途，相关决策请咨询专业人士。
 ```
