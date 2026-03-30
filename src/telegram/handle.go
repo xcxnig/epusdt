@@ -45,8 +45,8 @@ func WalletList(c tb.Context) error {
 		}
 		var temp []tb.InlineButton
 		btnInfo := tb.InlineButton{
-			Unique: wallet.Token,
-			Text:   fmt.Sprintf("%s[%s]", wallet.Token, status),
+			Unique: wallet.Address,
+			Text:   fmt.Sprintf("%s[%s]", wallet.Address, status),
 			Data:   strutil.MustString(wallet.ID),
 		}
 		bots.Handle(&btnInfo, WalletInfo)
@@ -93,7 +93,7 @@ func WalletInfo(c tb.Context) error {
 	bots.Handle(&disableBtn, DisableWallet)
 	bots.Handle(&delBtn, DelWallet)
 	bots.Handle(&backBtn, WalletList)
-	return c.EditOrReply(tokenInfo.Token, &tb.ReplyMarkup{InlineKeyboard: [][]tb.InlineButton{
+	return c.EditOrReply(tokenInfo.Address, &tb.ReplyMarkup{InlineKeyboard: [][]tb.InlineButton{
 		{
 			enableBtn,
 			disableBtn,

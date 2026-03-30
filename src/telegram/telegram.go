@@ -46,14 +46,21 @@ func RegisterHandle() {
 // SendToBot 主动发送消息机器人消息
 func SendToBot(msg string) {
 	go func() {
+		if bots == nil {
+			log.Sugar.Error("[Telegram] bots实例为nil，无法发送消息")
+			return
+		}
 		user := tb.User{
 			ID: config.TgManage,
 		}
+		log.Sugar.Infof("[Telegram] 正在发送消息给用户ID=%d", config.TgManage)
 		_, err := bots.Send(&user, msg, &tb.SendOptions{
 			ParseMode: tb.ModeHTML,
 		})
 		if err != nil {
-			log.Sugar.Error(err)
+			log.Sugar.Errorf("[Telegram] 发送消息失败: userID=%d, err=%v", config.TgManage, err)
+		} else {
+			log.Sugar.Infof("[Telegram] 发送消息成功: userID=%d", config.TgManage)
 		}
 	}()
 }

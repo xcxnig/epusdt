@@ -13,8 +13,10 @@ type Orders struct {
 	OrderId            string  `gorm:"column:order_id" json:"order_id"`                                                                 //  客户交易id
 	BlockTransactionId string  `gorm:"index:orders_block_transaction_id_index;column:block_transaction_id" json:"block_transaction_id"` // 区块id
 	Amount             float64 `gorm:"column:amount" json:"amount"`                                                                     //  订单金额，保留4位小数
+	Currency           string  `gorm:"column:currency" json:"currency"`                                                                 //  订单货币类型 CNY USD......
 	ActualAmount       float64 `gorm:"column:actual_amount" json:"actual_amount"`                                                       //  订单实际需要支付的金额，保留4位小数
-	Token              string  `gorm:"column:token" json:"token"`                                                                       //  所属钱包地址
+	ReceiveAddress     string  `gorm:"column:receive_address" json:"receive_address"`                                                   //  所属钱包地址
+	Token              string  `gorm:"column:token" json:"token"`                                                                       //  所属币种 TRX USDT......
 	Status             int     `gorm:"column:status;default:1" json:"status"`                                                           //  1：等待支付，2：支付成功，3：已过期
 	NotifyUrl          string  `gorm:"column:notify_url" json:"notify_url"`                                                             //  异步回调地址
 	RedirectUrl        string  `gorm:"column:redirect_url" json:"redirect_url"`                                                         //  同步回调地址

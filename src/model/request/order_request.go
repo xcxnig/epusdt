@@ -5,6 +5,8 @@ import "github.com/gookit/validate"
 // CreateTransactionRequest 创建交易请求
 type CreateTransactionRequest struct {
 	OrderId     string  `json:"order_id" validate:"required|maxLen:32"`
+	Currency    string  `json:"currency" validate:"required"`
+	Token       string  `json:"token" validate:"required"`
 	Amount      float64 `json:"amount" validate:"required|isFloat|gt:0.01"`
 	NotifyUrl   string  `json:"notify_url" validate:"required"`
 	Signature   string  `json:"signature"  validate:"required"`
@@ -14,6 +16,8 @@ type CreateTransactionRequest struct {
 func (r CreateTransactionRequest) Translates() map[string]string {
 	return validate.MS{
 		"OrderId":   "订单号",
+		"Currency":  "货币",
+		"Token":     "币种",
 		"Amount":    "支付金额",
 		"NotifyUrl": "异步回调网址",
 		"Signature": "签名",
@@ -22,6 +26,8 @@ func (r CreateTransactionRequest) Translates() map[string]string {
 
 // OrderProcessingRequest 订单处理
 type OrderProcessingRequest struct {
+	ReceiveAddress     string
+	Currency           string
 	Token              string
 	Amount             float64
 	TradeId            string

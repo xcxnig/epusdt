@@ -47,6 +47,7 @@ func OrderCallbackHandle(ctx context.Context, t *asynq.Task) error {
 		OrderId:            order.OrderId,
 		Amount:             order.Amount,
 		ActualAmount:       order.ActualAmount,
+		ReceiveAddress:     order.ReceiveAddress,
 		Token:              order.Token,
 		BlockTransactionId: order.BlockTransactionId,
 		Status:             mdb.StatusPaySuccess,

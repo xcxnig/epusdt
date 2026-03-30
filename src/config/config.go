@@ -2,22 +2,28 @@ package config
 
 import (
 	"fmt"
-	"github.com/spf13/viper"
+	"log"
 	"net/url"
 	"os"
 	"time"
+
+	"github.com/assimon/luuu/util/http_client"
+	"github.com/spf13/viper"
+	"github.com/tidwall/gjson"
 )
 
 var (
-	AppDebug    bool
-	MysqlDns    string
-	RuntimePath string
-	LogSavePath string
-	StaticPath  string
-	TgBotToken  string
-	TgProxy     string
-	TgManage    int64
-	UsdtRate    float64
+	AppDebug          bool
+	MysqlDns          string
+	RuntimePath       string
+	LogSavePath       string
+	StaticPath        string
+	TgBotToken        string
+	TgProxy           string
+	TgManage          int64
+	UsdtRate          float64
+	RateApiUrl        string
+	TRON_GRID_API_KEY string
 )
 
 func Init() {
@@ -52,6 +58,9 @@ func Init() {
 	TgBotToken = viper.GetString("tg_bot_token")
 	TgProxy = viper.GetString("tg_proxy")
 	TgManage = viper.GetInt64("tg_manage")
+
+	GetRateApiUrl()
+	TRON_GRID_API_KEY = viper.GetString("tron_grid_api_key")
 }
 
 func GetAppVersion() string {
@@ -72,6 +81,52 @@ func GetAppUri() string {
 
 func GetApiAuthToken() string {
 	return viper.GetString("api_auth_token")
+}
+
+func GetRateApiUrl() string {
+	url := viper.GetString("api_rate_url")
+	urlFromEnv := os.Getenv("API_RATE_URL")
+	if url == "" && urlFromEnv != "" {
+		url = urlFromEnv
+	}
+	if url == "" {
+		log.Println("api_rate_url is empty")
+	}
+	RateApiUrl = url
+	return url
+}
+
+func GetRateForCoin(coin string, base string) float64 {
+	client := http_client.GetHttpClient()
+	baseUrl := RateApiUrl
+	if baseUrl == "" {
+		log.Printf("rate api url is empty")
+		return 0.0
+	}
+	if baseUrl[len(baseUrl)-1] != '/' {
+		baseUrl += "/"
+	}
+	url := baseUrl + fmt.Sprintf("%s.json", base)
+
+	fmt.Println("call rate api url:", url)
+
+	resp, err := client.R().Get(url)
+	if err != nil {
+		log.Printf("call rate api error: %s", err.Error())
+		return 0.0
+	}
+
+	targetRate := 0.0
+
+	gjson.GetBytes(resp.Body(), base).ForEach(func(key, value gjson.Result) bool {
+		if key.String() == coin {
+			targetRate = value.Float()
+			return false
+		}
+		return true
+	})
+	return targetRate
+
 }
 
 func GetUsdtRate() float64 {

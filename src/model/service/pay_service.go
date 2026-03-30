@@ -21,6 +21,7 @@ func GetCheckoutCounterByTradeId(tradeId string) (*response.CheckoutCounterRespo
 	resp := &response.CheckoutCounterResponse{
 		TradeId:        orderInfo.TradeId,
 		ActualAmount:   orderInfo.ActualAmount,
+		ReceiveAddress: orderInfo.ReceiveAddress,
 		Token:          orderInfo.Token,
 		ExpirationTime: orderInfo.CreatedAt.AddMinutes(config.GetOrderExpirationTime()).TimestampMilli(),
 		RedirectUrl:    orderInfo.RedirectUrl,

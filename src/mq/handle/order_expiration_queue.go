@@ -31,7 +31,7 @@ func OrderExpirationHandle(ctx context.Context, t *asynq.Task) error {
 	if err != nil {
 		return err
 	}
-	err = data.UnLockTransaction(orderInfo.Token, orderInfo.ActualAmount)
+	err = data.UnLockTransaction(orderInfo.ReceiveAddress, orderInfo.Token, orderInfo.ActualAmount)
 	if err != nil {
 		return err
 	}

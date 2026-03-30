@@ -7,8 +7,8 @@ import (
 )
 
 // AddWalletAddress 创建钱包
-func AddWalletAddress(token string) (*mdb.WalletAddress, error) {
-	exist, err := GetWalletAddressByToken(token)
+func AddWalletAddress(address string) (*mdb.WalletAddress, error) {
+	exist, err := GetWalletAddressByToken(address)
 	if err != nil {
 		return nil, err
 	}
@@ -16,17 +16,17 @@ func AddWalletAddress(token string) (*mdb.WalletAddress, error) {
 		return nil, constant.WalletAddressAlreadyExists
 	}
 	walletAddress := &mdb.WalletAddress{
-		Token:  token,
-		Status: mdb.TokenStatusEnable,
+		Address: address,
+		Status:  mdb.TokenStatusEnable,
 	}
 	err = dao.Mdb.Create(walletAddress).Error
 	return walletAddress, err
 }
 
-// GetWalletAddressByToken 通过钱包地址获取token
-func GetWalletAddressByToken(token string) (*mdb.WalletAddress, error) {
+// GetWalletAddressByToken 通过钱包地址获取address
+func GetWalletAddressByToken(address string) (*mdb.WalletAddress, error) {
 	walletAddress := new(mdb.WalletAddress)
-	err := dao.Mdb.Model(walletAddress).Limit(1).Find(walletAddress, "token = ?", token).Error
+	err := dao.Mdb.Model(walletAddress).Limit(1).Find(walletAddress, "address = ?", address).Error
 	return walletAddress, err
 }
 
