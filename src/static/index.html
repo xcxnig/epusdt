@@ -224,7 +224,7 @@
     $.ajax({
       type: "GET",
       dataType: "json",
-      url: "/pay/check-status/{{.TradeId}}",
+      url: "/legacy/pay/check-status/{{.TradeId}}",
       timeout: 10000,
       success: function (response, status) {
         if (response.data.status == 2) {

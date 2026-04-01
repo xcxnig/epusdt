@@ -2,15 +2,16 @@ package middleware
 
 import (
 	"bytes"
+	"io/ioutil"
+
 	"github.com/assimon/luuu/config"
 	"github.com/assimon/luuu/util/constant"
 	"github.com/assimon/luuu/util/json"
 	"github.com/assimon/luuu/util/sign"
 	"github.com/labstack/echo/v4"
-	"io/ioutil"
 )
 
-func CheckApiSign() echo.MiddlewareFunc {
+func LegecyCheckApiSign() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ctx echo.Context) error {
 			params, err := ioutil.ReadAll(ctx.Request().Body)
