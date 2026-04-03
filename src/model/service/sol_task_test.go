@@ -10,7 +10,7 @@ import (
 
 func TestParseSolTransaction(t *testing.T) {
 	client := rpc.New("https://api.mainnet-beta.solana.com")
-	sig := ""
+	sig := "3tZTwLrvmiZ59h4UzyMHPd7DPux7t9eXZgkUvEfquaoSuERrPSRNzWuSHKQM2fbiCWFDGNqoLpu2kLZnfoegVpqN"
 
 	txInfo, err := ParseTransactionTransfers(context.Background(), client, sig)
 	if err != nil {
@@ -33,7 +33,7 @@ func TestParseSolTransaction(t *testing.T) {
 }
 
 func TestFindATAAddress(t *testing.T) {
-	owner := ""
+	owner := "2uFTf9TZ8gd7Kg6hkb79TxfaeNpaAgpJ8uVHguv2Yweu"
 	mint := "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R" // ray token
 
 	ata, err := FindATAAddress(owner, mint)

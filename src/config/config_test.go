@@ -67,8 +67,27 @@ func TestResolveConfigFilePathUsesCurrentDirectoryByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve config path: %v", err)
 	}
-	if got != configPath {
-		t.Fatalf("config path = %s, want %s", got, configPath)
+
+	gotAbs, err := filepath.Abs(got)
+	if err != nil {
+		t.Fatalf("abs got: %v", err)
+	}
+	wantAbs, err := filepath.Abs(configPath)
+	if err != nil {
+		t.Fatalf("abs want: %v", err)
+	}
+
+	gotReal, err := filepath.EvalSymlinks(gotAbs)
+	if err != nil {
+		t.Fatalf("eval symlinks got: %v", err)
+	}
+	wantReal, err := filepath.EvalSymlinks(wantAbs)
+	if err != nil {
+		t.Fatalf("eval symlinks want: %v", err)
+	}
+
+	if gotReal != wantReal {
+		t.Fatalf("config path = %s, want %s", gotReal, wantReal)
 	}
 }
 
