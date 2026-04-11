@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/assimon/luuu/util/log"
 	"github.com/assimon/luuu/util/math"
 	"github.com/dromara/carbon/v2"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/gookit/goutil/stdutil"
 	"github.com/shopspring/decimal"
 	"github.com/tidwall/gjson"
@@ -256,6 +258,84 @@ func checkTrc20Transfers(address string, wg *sync.WaitGroup) {
 	}
 }
 
+func TryProcessEthereumERC20Transfer(contract common.Address, toAddr common.Address, rawValue *big.Int, txHash string, blockTsMs int64) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Sugar.Errorf("[ETH-WS] TryProcessEthereumERC20Transfer panic: %v", err)
+		}
+	}()
+
+	usdt := common.HexToAddress("0xdAC17F958D2ee523a2206206994597C13D831ec7")
+	usdc := common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+	var tokenSym string
+	switch contract {
+	case usdt:
+		tokenSym = "USDT"
+	case usdc:
+		tokenSym = "USDC"
+	default:
+		log.Sugar.Warnf("[ETH-WS] skip unsupported contract %s", contract.Hex())
+		return
+	}
+
+	walletAddr := strings.ToLower(toAddr.Hex())
+	if rawValue == nil || rawValue.Sign() <= 0 {
+		log.Sugar.Infof("[ETH-%s][%s] skip non-positive or nil amount", tokenSym, walletAddr)
+		return
+	}
+	decimalQuant := decimal.NewFromBigInt(rawValue, 0)
+	amount := math.MustParsePrecFloat64(decimalQuant.Div(decimal.NewFromInt(1_000_000)).InexactFloat64(), 2)
+	if amount <= 0 {
+		log.Sugar.Warnf("[ETH-%s][%s] skip non-positive amount %.2f", tokenSym, walletAddr, amount)
+		return
+	}
+
+	tradeID, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkEthereum, walletAddr, tokenSym, amount)
+	if err != nil {
+		log.Sugar.Warnf("[ETH-%s][%s] lock lookup: %v", tokenSym, walletAddr, err)
+		return
+	}
+	if tradeID == "" {
+		log.Sugar.Warnf("[ETH-%s][%s] skip unmatched tx hash=%s amount=%.2f", tokenSym, walletAddr, txHash, amount)
+		return
+	}
+
+	order, err := data.GetOrderInfoByTradeId(tradeID)
+	if err != nil {
+		log.Sugar.Warnf("[ETH-%s][%s] load order: %v", tokenSym, walletAddr, err)
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(order.Network)) != mdb.NetworkEthereum {
+		log.Sugar.Warnf("[ETH-%s][%s] skip trade_id=%s network=%q", tokenSym, walletAddr, tradeID, order.Network)
+		return
+	}
+	if strings.ToUpper(strings.TrimSpace(order.Token)) != tokenSym {
+		log.Sugar.Warnf("[ETH-%s][%s] skip trade_id=%s token mismatch order=%s", tokenSym, walletAddr, tradeID, order.Token)
+		return
+	}
+
+	req := &request.OrderProcessingRequest{
+		ReceiveAddress:     walletAddr,
+		Token:              tokenSym,
+		Network:            mdb.NetworkEthereum,
+		TradeId:            tradeID,
+		Amount:             amount,
+		BlockTransactionId: txHash,
+	}
+	err = OrderProcessing(req)
+	if err != nil {
+		if errors.Is(err, constant.OrderBlockAlreadyProcess) || errors.Is(err, constant.OrderStatusConflict) {
+			log.Sugar.Infof("[ETH-%s][%s] skip resolved trade_id=%s hash=%s err=%v", tokenSym, walletAddr, tradeID, txHash, err)
+			return
+		}
+		log.Sugar.Errorf("[ETH-%s][%s] OrderProcessing: %v", tokenSym, walletAddr, err)
+		return
+	}
+
+	sendPaymentNotification(order)
+	log.Sugar.Infof("[ETH-%s][%s] payment processed trade_id=%s hash=%s", tokenSym, walletAddr, tradeID, txHash)
+}
+
 func sendPaymentNotification(order *mdb.Orders) {
 	msg := fmt.Sprintf(
 		"🎉 <b>收款成功通知</b>\n\n"+
@@ -285,11 +365,13 @@ func sendPaymentNotification(order *mdb.Orders) {
 }
 
 func networkDisplay(n string) string {
-	switch n {
+	switch strings.ToLower(strings.TrimSpace(n)) {
 	case mdb.NetworkTron:
 		return "Tron"
 	case mdb.NetworkSolana:
 		return "Solana"
+	case mdb.NetworkEthereum:
+		return "Ethereum"
 	default:
 		if n == "" {
 			return "Tron"

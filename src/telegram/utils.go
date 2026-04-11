@@ -2,9 +2,21 @@ package telegram
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 
 	"github.com/btcsuite/btcutil/base58"
 )
+
+// isValidEthereumAddress 校验 0x + 20 字节十六进制（主网收款）。
+func isValidEthereumAddress(addr string) bool {
+	addr = strings.TrimSpace(addr)
+	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
+		return false
+	}
+	_, err := hex.DecodeString(addr[2:])
+	return err == nil
+}
 
 // isValidTronAddress 校验 Tron Base58Check 地址是否合法
 func isValidTronAddress(addr string) bool {

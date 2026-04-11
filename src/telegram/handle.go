@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	ReplayAddWallet         = "请发给我一个合法的钱包地址"
+	ReplayAddWallet         = "请发给我 TRON（T 开头）或以太坊主网（0x 开头）收款地址"
 	pendingWalletAddressTTL = 5 * time.Minute
 )
 
@@ -45,13 +46,17 @@ func OnTextMessageHandle(c tb.Context) error {
 		defer bots.Delete(msg.ReplyTo)
 	}
 
-	msgText := msg.Text
-	if !isValidTronAddress(msgText) {
-		_ = c.Send(fmt.Sprintf("钱包 [%s] 添加失败：不是合法的 TRON 地址", msgText))
+	msgText := strings.TrimSpace(msg.Text)
+	var err error
+	switch {
+	case isValidTronAddress(msgText):
+		_, err = data.AddWalletAddress(msgText)
+	case isValidEthereumAddress(msgText):
+		_, err = data.AddWalletAddressWithNetwork(mdb.NetworkEthereum, strings.ToLower(msgText))
+	default:
+		_ = c.Send(fmt.Sprintf("钱包 [%s] 添加失败：不是合法的 TRON 或以太坊地址", msgText))
 		return nil
 	}
-
-	_, err := data.AddWalletAddress(msgText)
 	if err != nil {
 		return c.Send(err.Error())
 	}
@@ -73,10 +78,14 @@ func WalletList(c tb.Context) error {
 		if wallet.Status == mdb.TokenStatusDisable {
 			status = "已禁用🚫"
 		}
+		net := wallet.Network
+		if net == "" {
+			net = mdb.NetworkTron
+		}
 
 		btnInfo := tb.InlineButton{
 			Unique: wallet.Address,
-			Text:   fmt.Sprintf("%s [%s]", wallet.Address, status),
+			Text:   fmt.Sprintf("[%s] %s [%s]", net, wallet.Address, status),
 			Data:   strutil.MustString(wallet.ID),
 		}
 		bots.Handle(&btnInfo, WalletInfo)
@@ -131,7 +140,12 @@ func WalletInfo(c tb.Context) error {
 	bots.Handle(&delBtn, DelWallet)
 	bots.Handle(&backBtn, WalletList)
 
-	return c.EditOrReply(tokenInfo.Address, &tb.ReplyMarkup{InlineKeyboard: [][]tb.InlineButton{
+	net := tokenInfo.Network
+	if net == "" {
+		net = mdb.NetworkTron
+	}
+	detail := fmt.Sprintf("网络：%s\n地址：%s", net, tokenInfo.Address)
+	return c.EditOrReply(detail, &tb.ReplyMarkup{InlineKeyboard: [][]tb.InlineButton{
 		{
 			enableBtn,
 			disableBtn,

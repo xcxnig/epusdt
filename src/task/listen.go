@@ -7,6 +7,8 @@ import (
 
 func Start() {
 	log.Sugar.Info("[task] Starting task scheduler...")
+	go StartEthereumWebSocketListener()
+
 	c := cron.New()
 	// trc20钱包监听
 	_, err := c.AddJob("@every 5s", ListenTrc20Job{})

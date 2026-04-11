@@ -336,3 +336,7 @@ func GetSolanaRpcUrl() string {
 	}
 	return rpcUrl
 }
+
+func GetEthereumWsUrl() string {
+	return strings.TrimSpace(viper.GetString("ethereum_ws_url"))
+}
