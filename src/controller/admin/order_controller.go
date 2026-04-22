@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/model/request"
-	"github.com/assimon/luuu/model/service"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/request"
+	"github.com/GMWalletApp/epusdt/model/service"
 	"github.com/labstack/echo/v4"
 )
 

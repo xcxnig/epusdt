@@ -22,17 +22,21 @@ const (
 )
 
 const (
-	SettingKeyJwtSecret         = "system.jwt_secret"
-	SettingKeyOrderExpiration   = "system.order_expiration_time"
-	SettingKeyBrandSiteName     = "brand.site_name"
-	SettingKeyBrandLogoUrl      = "brand.logo_url"
-	SettingKeyBrandPageTitle    = "brand.page_title"
-	SettingKeyBrandPaySuccess   = "brand.pay_success_text"
-	SettingKeyBrandSupportUrl   = "brand.support_url"
-	SettingKeyRateForcedUsdt    = "rate.forced_usdt_rate"
-	SettingKeyRateAdjustPercent = "rate.adjust_percent"
-	SettingKeyRateOkxC2cEnabled = "rate.okx_c2c_enabled"
-	SettingKeyRateApiUrl        = "rate.api_url"
+	SettingKeyJwtSecret                = "system.jwt_secret"
+	SettingKeyInitAdminPasswordPlain   = "system.init_admin_password_plain"
+	SettingKeyInitAdminPasswordHash    = "system.init_admin_password_hash"
+	SettingKeyInitAdminPasswordFetched = "system.init_admin_password_fetched"
+	SettingKeyInitAdminPasswordChanged = "system.init_admin_password_changed"
+	SettingKeyOrderExpiration          = "system.order_expiration_time"
+	SettingKeyBrandSiteName            = "brand.site_name"
+	SettingKeyBrandLogoUrl             = "brand.logo_url"
+	SettingKeyBrandPageTitle           = "brand.page_title"
+	SettingKeyBrandPaySuccess          = "brand.pay_success_text"
+	SettingKeyBrandSupportUrl          = "brand.support_url"
+	SettingKeyRateForcedUsdt           = "rate.forced_usdt_rate"
+	SettingKeyRateAdjustPercent        = "rate.adjust_percent"
+	SettingKeyRateOkxC2cEnabled        = "rate.okx_c2c_enabled"
+	SettingKeyRateApiUrl               = "rate.api_url"
 
 	// EPAY route defaults — can be overridden via admin settings.
 	SettingKeyEpayDefaultToken    = "epay.default_token"

@@ -1,1 +1,0 @@
-import{ou as e,ru as t}from"./messages-BovT1T-w.js";import{t as n}from"./useRouter-D03zSgJO.js";var r=e(t(),1);function i(e){let t=n();return r.useCallback(n=>t.navigate({...n,from:n.from??e?.from}),[e?.from,t])}export{i as t};

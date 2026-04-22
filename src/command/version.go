@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 
-	"github.com/assimon/luuu/config"
+	"github.com/GMWalletApp/epusdt/config"
 	"github.com/spf13/cobra"
 )
 

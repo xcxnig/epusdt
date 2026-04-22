@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/model/request"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/request"
 	"github.com/dromara/carbon/v2"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"

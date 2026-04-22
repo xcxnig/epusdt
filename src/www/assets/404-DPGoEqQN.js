@@ -1,0 +1,1 @@
+import{t as e}from"./not-found-error-BKAx_mEr.js";var t=e;export{t as component};

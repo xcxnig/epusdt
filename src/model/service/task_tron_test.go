@@ -3,26 +3,19 @@ package service
 import (
 	"testing"
 
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/internal/testutil"
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/mdb"
+	"github.com/GMWalletApp/epusdt/internal/testutil"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 )
 
-// TestResolveTronNode_NoRow verifies that resolveTronNode falls back to the
-// hard-coded default when the rpc_nodes table has no TRON row.
+// TestResolveTronNode_NoRow verifies that resolveTronNode requires an enabled
+// TRON row from rpc_nodes.
 func TestResolveTronNode_NoRow(t *testing.T) {
 	cleanup := testutil.SetupTestDatabases(t)
 	defer cleanup()
 
-	config.TRON_GRID_API_KEY = "fallback-key"
-
-	gotURL, gotKey := resolveTronNode()
-	if gotURL != tronNodeDefault {
-		t.Errorf("url = %q, want %q", gotURL, tronNodeDefault)
-	}
-	if gotKey != "fallback-key" {
-		t.Errorf("apiKey = %q, want \"fallback-key\"", gotKey)
+	if gotURL, gotKey, err := resolveTronNode(); err == nil {
+		t.Fatalf("resolveTronNode() = (%q, %q, nil), want error", gotURL, gotKey)
 	}
 }
 
@@ -31,8 +24,6 @@ func TestResolveTronNode_NoRow(t *testing.T) {
 func TestResolveTronNode_WithRow(t *testing.T) {
 	cleanup := testutil.SetupTestDatabases(t)
 	defer cleanup()
-
-	config.TRON_GRID_API_KEY = "fallback-key"
 
 	// Insert an enabled TRON http node.
 	node := &mdb.RpcNode{
@@ -48,7 +39,10 @@ func TestResolveTronNode_WithRow(t *testing.T) {
 		t.Fatalf("seed rpc_node: %v", err)
 	}
 
-	gotURL, gotKey := resolveTronNode()
+	gotURL, gotKey, err := resolveTronNode()
+	if err != nil {
+		t.Fatalf("resolveTronNode(): %v", err)
+	}
 	if gotURL != "https://custom-tron.example.com" {
 		t.Errorf("url = %q, want https://custom-tron.example.com", gotURL)
 	}
@@ -57,13 +51,10 @@ func TestResolveTronNode_WithRow(t *testing.T) {
 	}
 }
 
-// TestResolveTronNode_DisabledRow verifies that a disabled row is ignored and
-// the fallback is used.
+// TestResolveTronNode_DisabledRow verifies that a disabled row is ignored.
 func TestResolveTronNode_DisabledRow(t *testing.T) {
 	cleanup := testutil.SetupTestDatabases(t)
 	defer cleanup()
-
-	config.TRON_GRID_API_KEY = "fallback-key"
 
 	node := &mdb.RpcNode{
 		Network: mdb.NetworkTron,
@@ -82,11 +73,7 @@ func TestResolveTronNode_DisabledRow(t *testing.T) {
 		t.Fatalf("disable rpc_node: %v", err)
 	}
 
-	gotURL, gotKey := resolveTronNode()
-	if gotURL != tronNodeDefault {
-		t.Errorf("url = %q, want %q (disabled row should be ignored)", gotURL, tronNodeDefault)
-	}
-	if gotKey != "fallback-key" {
-		t.Errorf("apiKey = %q, want \"fallback-key\"", gotKey)
+	if gotURL, gotKey, err := resolveTronNode(); err == nil {
+		t.Fatalf("resolveTronNode() = (%q, %q, nil), want error", gotURL, gotKey)
 	}
 }

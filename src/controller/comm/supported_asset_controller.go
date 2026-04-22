@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/response"
-	"github.com/assimon/luuu/util/constant"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/response"
+	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/labstack/echo/v4"
 )
 

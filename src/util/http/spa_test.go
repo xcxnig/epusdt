@@ -66,3 +66,32 @@ func TestResolveSPAFilePath(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldSkipSPAFallback(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "api root", path: "/api", want: true},
+		{name: "api sub path", path: "/api/install/defaults", want: true},
+		{name: "admin api root", path: "/admin/api", want: true},
+		{name: "admin api sub path", path: "/admin/api/v1/orders", want: true},
+		{name: "payments root", path: "/payments", want: true},
+		{name: "payments sub path", path: "/payments/gmpay/v1/order/create-transaction", want: true},
+		{name: "pay root", path: "/pay", want: true},
+		{name: "pay sub path", path: "/pay/checkout-counter/abc", want: true},
+		{name: "not exact prefix", path: "/apiary", want: false},
+		{name: "normal spa route", path: "/install", want: false},
+		{name: "normal asset route", path: "/assets/index.js", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ShouldSkipSPAFallback(tt.path)
+			if got != tt.want {
+				t.Fatalf("ShouldSkipSPAFallback(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}

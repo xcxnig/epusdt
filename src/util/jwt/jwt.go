@@ -6,8 +6,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/golang-jwt/jwt/v4"
 )
 

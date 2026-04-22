@@ -1,8 +1,8 @@
 package http
 
 import (
-	"github.com/assimon/luuu/util/constant"
-	"github.com/assimon/luuu/util/page"
+	"github.com/GMWalletApp/epusdt/util/constant"
+	"github.com/GMWalletApp/epusdt/util/page"
 	"github.com/labstack/echo/v4"
 	"net/http"
 )

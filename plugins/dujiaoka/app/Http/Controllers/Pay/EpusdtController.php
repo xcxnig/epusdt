@@ -2,8 +2,8 @@
 /**
  * The file was created by Assimon.
  *
- * @author    assimon<ashang@utf8.hk>
- * @copyright assimon<ashang@utf8.hk>
+ * @author    GMWalletApp<ashang@utf8.hk>
+ * @copyright GMWalletApp<ashang@utf8.hk>
  * @link      http://utf8.hk/
  */
 

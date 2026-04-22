@@ -1,4 +1,4 @@
-module github.com/assimon/luuu
+module github.com/GMWalletApp/epusdt
 
 go 1.25.0
 

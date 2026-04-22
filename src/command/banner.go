@@ -1,7 +1,7 @@
 package command
 
 import (
-	"github.com/assimon/luuu/config"
+	"github.com/GMWalletApp/epusdt/config"
 	"github.com/gookit/color"
 )
 

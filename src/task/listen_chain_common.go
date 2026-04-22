@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/util/log"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/log"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -90,12 +90,22 @@ func loadChainTokenContracts(network, logPrefix string) []common.Address {
 }
 
 // resolveChainWsURL picks a healthy WS endpoint from rpc_nodes for the
-// given network, falling back to the provided default (usually the
-// public node URL) when no row is configured.
-func resolveChainWsURL(network, fallback string) string {
+// given network. If no enabled node is configured, the caller skips the
+// current listener run so admin-side disabled/deleted rows are respected.
+func resolveChainWsURL(network, logPrefix string) (string, bool) {
 	node, err := data.SelectRpcNode(network, mdb.RpcNodeTypeWs)
 	if err == nil && node != nil && node.ID > 0 {
-		return node.Url
+		rpcURL := strings.TrimSpace(node.Url)
+		if rpcURL != "" {
+			return rpcURL, true
+		}
+		log.Sugar.Errorf("%s rpc_nodes id=%d has empty url", logPrefix, node.ID)
+		return "", false
 	}
-	return fallback
+	if err != nil {
+		log.Sugar.Errorf("%s resolve rpc_nodes err=%v", logPrefix, err)
+	} else {
+		log.Sugar.Warnf("%s no enabled %s WS RPC node configured in rpc_nodes", logPrefix, network)
+	}
+	return "", false
 }

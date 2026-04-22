@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/model/request"
-	"github.com/assimon/luuu/util/constant"
-	"github.com/assimon/luuu/util/log"
-	"github.com/assimon/luuu/util/math"
+	"github.com/GMWalletApp/epusdt/config"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/request"
+	"github.com/GMWalletApp/epusdt/util/constant"
+	"github.com/GMWalletApp/epusdt/util/log"
+	"github.com/GMWalletApp/epusdt/util/math"
 	"github.com/gagliardetto/solana-go"
 	"github.com/go-resty/resty/v2"
 	"github.com/shopspring/decimal"
@@ -281,6 +281,21 @@ type solSignatureResult struct {
 	BlockTime *int64      `json:"blockTime"`
 }
 
+func resolveSolanaRpcURL() (string, error) {
+	node, err := data.SelectRpcNode(mdb.NetworkSolana, mdb.RpcNodeTypeHttp)
+	if err != nil {
+		return "", err
+	}
+	if node == nil || node.ID == 0 {
+		return "", fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkSolana, mdb.RpcNodeTypeHttp)
+	}
+	rpcURL := strings.TrimSpace(node.Url)
+	if rpcURL == "" {
+		return "", fmt.Errorf("rpc_nodes id=%d has empty url", node.ID)
+	}
+	return rpcURL, nil
+}
+
 // SolRetryClient 发送 Solana JSON-RPC 请求，自动重试
 func SolRetryClient(method string, params []interface{}) ([]byte, error) {
 	client := resty.New()
@@ -297,7 +312,10 @@ func SolRetryClient(method string, params []interface{}) ([]byte, error) {
 		return false
 	})
 
-	rpcUrl := config.GetSolanaRpcUrl()
+	rpcUrl, err := resolveSolanaRpcURL()
+	if err != nil {
+		return nil, err
+	}
 
 	resp, err := client.R().
 		SetHeader("Content-Type", "application/json").

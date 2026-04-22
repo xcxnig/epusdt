@@ -9,16 +9,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/assimon/luuu/config"
-	tron "github.com/assimon/luuu/crypto"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/model/request"
-	"github.com/assimon/luuu/notify"
-	"github.com/assimon/luuu/util/constant"
-	"github.com/assimon/luuu/util/http_client"
-	"github.com/assimon/luuu/util/log"
-	"github.com/assimon/luuu/util/math"
+	tron "github.com/GMWalletApp/epusdt/crypto"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/request"
+	"github.com/GMWalletApp/epusdt/notify"
+	"github.com/GMWalletApp/epusdt/util/constant"
+	"github.com/GMWalletApp/epusdt/util/http_client"
+	"github.com/GMWalletApp/epusdt/util/log"
+	"github.com/GMWalletApp/epusdt/util/math"
 	"github.com/dromara/carbon/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/gookit/goutil/stdutil"
@@ -26,19 +25,21 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// tronNodeDefault is the fallback when no rpc_nodes row exists for TRON.
-const tronNodeDefault = "https://api.trongrid.io"
-
 // resolveTronNode returns (baseURL, apiKey) for the TRON HTTP RPC node.
-// It reads the first healthy (or any enabled) row from the rpc_nodes table;
-// if none exists it falls back to the hard-coded default URL and the
-// tron_grid_api_key value from .env (config.TRON_GRID_API_KEY).
-func resolveTronNode() (string, string) {
+// It reads the first healthy (or any enabled) row from the rpc_nodes table.
+func resolveTronNode() (string, string, error) {
 	node, err := data.SelectRpcNode(mdb.NetworkTron, mdb.RpcNodeTypeHttp)
-	if err == nil && node != nil && node.ID > 0 {
-		return strings.TrimRight(node.Url, "/"), node.ApiKey
+	if err != nil {
+		return "", "", err
 	}
-	return tronNodeDefault, config.TRON_GRID_API_KEY
+	if node == nil || node.ID == 0 {
+		return "", "", fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkTron, mdb.RpcNodeTypeHttp)
+	}
+	rpcURL := strings.TrimRight(strings.TrimSpace(node.Url), "/")
+	if rpcURL == "" {
+		return "", "", fmt.Errorf("rpc_nodes id=%d has empty url", node.ID)
+	}
+	return rpcURL, node.ApiKey, nil
 }
 
 func Trc20CallBack(address string, wg *sync.WaitGroup) {
@@ -79,7 +80,11 @@ func checkTrxTransfers(address string, wg *sync.WaitGroup) {
 	client := http_client.GetHttpClient()
 	startTime := carbon.Now().AddHours(-24).TimestampMilli()
 	endTime := carbon.Now().TimestampMilli()
-	tronBaseURL, tronAPIKey := resolveTronNode()
+	tronBaseURL, tronAPIKey, err := resolveTronNode()
+	if err != nil {
+		log.Sugar.Errorf("[TRX][%s] resolve rpc_nodes err=%v", address, err)
+		return
+	}
 	url := fmt.Sprintf("%s/v1/accounts/%s/transactions", tronBaseURL, address)
 
 	resp, err := client.R().SetQueryParams(map[string]string{
@@ -217,7 +222,11 @@ func checkTrc20Transfers(address string, wg *sync.WaitGroup) {
 	client := http_client.GetHttpClient()
 	startTime := carbon.Now().AddHours(-24).TimestampMilli()
 	endTime := carbon.Now().TimestampMilli()
-	tronBaseURL, tronAPIKey := resolveTronNode()
+	tronBaseURL, tronAPIKey, err := resolveTronNode()
+	if err != nil {
+		log.Sugar.Errorf("[TRC20][%s] resolve rpc_nodes err=%v", address, err)
+		return
+	}
 	url := fmt.Sprintf("%s/v1/accounts/%s/transactions/trc20", tronBaseURL, address)
 
 	resp, err := client.R().SetQueryParams(map[string]string{

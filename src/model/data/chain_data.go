@@ -3,8 +3,8 @@ package data
 import (
 	"strings"
 
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 )
 
 // ListChains returns all chain rows ordered by id.

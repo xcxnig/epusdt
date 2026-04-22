@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 	"gorm.io/gorm/clause"
 )
 
@@ -151,6 +151,10 @@ func DeleteSetting(key string) error {
 // sensitiveSettingKeys lists keys that must never be returned to API callers.
 var sensitiveSettingKeys = []string{
 	mdb.SettingKeyJwtSecret,
+	mdb.SettingKeyInitAdminPasswordPlain,
+	mdb.SettingKeyInitAdminPasswordHash,
+	mdb.SettingKeyInitAdminPasswordFetched,
+	mdb.SettingKeyInitAdminPasswordChanged,
 }
 
 // ListSettingsByGroup returns all rows for a given group (empty group = all),

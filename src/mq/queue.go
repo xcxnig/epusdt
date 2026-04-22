@@ -3,7 +3,7 @@ package mq
 import (
 	"sync"
 
-	"github.com/assimon/luuu/config"
+	"github.com/GMWalletApp/epusdt/config"
 )
 
 var (

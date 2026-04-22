@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/assimon/luuu/internal/testutil"
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/util/sign"
+	"github.com/GMWalletApp/epusdt/internal/testutil"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/sign"
 )
 
 func TestProcessExpiredOrdersExpiresWaitingOrdersAndReleasesLocks(t *testing.T) {

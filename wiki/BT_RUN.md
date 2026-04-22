@@ -15,11 +15,11 @@
 ### 二、导入Sql
 登录管理刚刚新增数据库，导入`Epusdt`所需的sql文件。 
 
-以下为示范0.01版本 最新数据库请以 https://github.com/assimon/epusdt/blob/master/sql/ 为准
+以下为示范0.01版本 最新数据库请以 https://github.com/GMWalletApp/epusdt/blob/master/sql/ 为准
 
 #### 1.手动下载导入
 
-数据库地址:https://github.com/assimon/epusdt/blob/master/sql/v0.0.1.sql
+数据库地址:https://github.com/GMWalletApp/epusdt/blob/master/sql/v0.0.1.sql
 ![导入Sql](img/sql.png)
 
 #### 2.使用phpMyAdmin导入

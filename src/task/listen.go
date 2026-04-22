@@ -1,7 +1,7 @@
 package task
 
 import (
-	"github.com/assimon/luuu/util/log"
+	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/robfig/cron/v3"
 )
 

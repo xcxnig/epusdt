@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/labstack/echo/v4"
 )
 
@@ -113,6 +113,14 @@ func doPutAdmin(e *echo.Echo, path string, body map[string]interface{}, token st
 	req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(string(jsonBytes)))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	return rec
+}
+
+// doGet sends an unauthenticated GET request.
+func doGet(e *echo.Echo, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	return rec
@@ -270,6 +278,84 @@ func TestAdminChangePassword(t *testing.T) {
 	code2, _ := resp2["code"].(float64)
 	if code2 == 200 {
 		t.Fatal("old password should no longer work after change")
+	}
+}
+
+// TestAdminInitPasswordFlow verifies the one-time initial password endpoint
+// and hash-based "password changed" detection flow.
+func TestAdminInitPasswordFlow(t *testing.T) {
+	e := setupTestEnv(t)
+	const initPassword = "init-pass-123456"
+
+	adminHash, err := data.HashPassword(initPassword)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	dao.Mdb.Create(&mdb.AdminUser{
+		Username:     testAdminUsername,
+		PasswordHash: adminHash,
+		Status:       mdb.AdminUserStatusEnable,
+	})
+	_ = data.SetSetting(mdb.SettingGroupSystem, mdb.SettingKeyInitAdminPasswordPlain, initPassword, mdb.SettingTypeString)
+	_ = data.SetSetting(mdb.SettingGroupSystem, mdb.SettingKeyInitAdminPasswordHash, data.HashInitialAdminPassword(initPassword), mdb.SettingTypeString)
+	_ = data.SetSetting(mdb.SettingGroupSystem, mdb.SettingKeyInitAdminPasswordFetched, "false", mdb.SettingTypeBool)
+	_ = data.SetSetting(mdb.SettingGroupSystem, mdb.SettingKeyInitAdminPasswordChanged, "false", mdb.SettingTypeBool)
+
+	recHash := doGet(e, "/admin/api/v1/auth/init-password-hash")
+	respHash := assertOK(t, recHash)
+	hashData, _ := respHash["data"].(map[string]interface{})
+	if got := hashData["password_hash"]; got != data.HashInitialAdminPassword(initPassword) {
+		t.Fatalf("expected init hash %s, got %v", data.HashInitialAdminPassword(initPassword), got)
+	}
+	if got, _ := hashData["password_changed"].(bool); got {
+		t.Fatalf("expected password_changed=false before change, got true")
+	}
+
+	recFetch := doGet(e, "/admin/api/v1/auth/init-password")
+	respFetch := assertOK(t, recFetch)
+	fetchData, _ := respFetch["data"].(map[string]interface{})
+	if fetchData["username"] != testAdminUsername {
+		t.Fatalf("expected username=%s, got %v", testAdminUsername, fetchData["username"])
+	}
+	if fetchData["password"] != initPassword {
+		t.Fatalf("expected initial password %s, got %v", initPassword, fetchData["password"])
+	}
+
+	recFetch2 := doGet(e, "/admin/api/v1/auth/init-password")
+	if recFetch2.Code != http.StatusBadRequest {
+		t.Fatalf("second fetch should fail with 400, got %d body=%s", recFetch2.Code, recFetch2.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(recFetch2.Body.String()), "already fetched") {
+		t.Fatalf("expected already fetched error, got: %s", recFetch2.Body.String())
+	}
+
+	token := adminLogin(t, e, testAdminUsername, initPassword)
+
+	recMe1 := doGetAdmin(e, "/admin/api/v1/auth/me", token)
+	respMe1 := assertOK(t, recMe1)
+	meData1, _ := respMe1["data"].(map[string]interface{})
+	if got, _ := meData1["password_is_default"].(bool); !got {
+		t.Fatalf("expected password_is_default=true before change, got %v", got)
+	}
+
+	recChange := doPostAdmin(e, "/admin/api/v1/auth/password", map[string]interface{}{
+		"old_password": initPassword,
+		"new_password": "new-pass-789",
+	}, token)
+	assertOK(t, recChange)
+
+	recHash2 := doGet(e, "/admin/api/v1/auth/init-password-hash")
+	respHash2 := assertOK(t, recHash2)
+	hashData2, _ := respHash2["data"].(map[string]interface{})
+	if got, _ := hashData2["password_changed"].(bool); !got {
+		t.Fatalf("expected password_changed=true after change, got %v", got)
+	}
+
+	recMe2 := doGetAdmin(e, "/admin/api/v1/auth/me", token)
+	respMe2 := assertOK(t, recMe2)
+	meData2, _ := respMe2["data"].(map[string]interface{})
+	if got, _ := meData2["password_is_default"].(bool); got {
+		t.Fatalf("expected password_is_default=false after change, got %v", got)
 	}
 }
 

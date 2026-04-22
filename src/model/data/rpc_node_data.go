@@ -4,8 +4,8 @@ import (
 	"math/rand"
 	"strings"
 
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/dromara/carbon/v2"
 )
 
@@ -47,8 +47,8 @@ func DeleteRpcNodeByID(id uint64) error {
 
 // SelectRpcNode picks a healthy RPC endpoint for a (network, type) pair.
 // Strategy: weighted random among rows where enabled=true AND status=ok.
-// Falls back to any enabled row when none are healthy yet (bootstrap case
-// where the health check hasn't run). Returns nil if nothing is defined.
+// Falls back to enabled rows with status=unknown when no health check has
+// run yet. Explicitly down rows are not selected.
 func SelectRpcNode(network, nodeType string) (*mdb.RpcNode, error) {
 	var rows []mdb.RpcNode
 	err := dao.Mdb.Model(&mdb.RpcNode{}).
@@ -62,15 +62,22 @@ func SelectRpcNode(network, nodeType string) (*mdb.RpcNode, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	healthy := rows[:0]
+	healthy := make([]mdb.RpcNode, 0, len(rows))
+	bootstrap := make([]mdb.RpcNode, 0, len(rows))
 	for _, r := range rows {
-		if r.Status == mdb.RpcNodeStatusOk {
+		switch r.Status {
+		case mdb.RpcNodeStatusOk:
 			healthy = append(healthy, r)
+		case "", mdb.RpcNodeStatusUnknown:
+			bootstrap = append(bootstrap, r)
 		}
 	}
 	candidates := healthy
 	if len(candidates) == 0 {
-		candidates = rows // bootstrap: no health check has run yet
+		candidates = bootstrap
+	}
+	if len(candidates) == 0 {
+		return nil, nil
 	}
 	return pickWeighted(candidates), nil
 }

@@ -3,11 +3,11 @@ package telegram
 import (
 	"testing"
 
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/internal/testutil"
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
+	"github.com/GMWalletApp/epusdt/config"
+	"github.com/GMWalletApp/epusdt/internal/testutil"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 )
 
 func withTelegramEnv(token, proxy string, manage int64, fn func()) {

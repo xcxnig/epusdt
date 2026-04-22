@@ -2,13 +2,59 @@ package service
 
 import (
 	"encoding/json"
-	"fmt"
+	"os"
 	"testing"
 
+	"github.com/GMWalletApp/epusdt/internal/testutil"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/tidwall/gjson"
 )
 
+func setupSolanaRPCNode(t *testing.T, url string) func() {
+	t.Helper()
+
+	cleanup := testutil.SetupTestDatabases(t)
+	node := &mdb.RpcNode{
+		Network: mdb.NetworkSolana,
+		Url:     url,
+		Type:    mdb.RpcNodeTypeHttp,
+		Weight:  1,
+		Enabled: true,
+		Status:  mdb.RpcNodeStatusOk,
+	}
+	if err := dao.Mdb.Create(node).Error; err != nil {
+		cleanup()
+		t.Fatalf("seed solana rpc_node: %v", err)
+	}
+	return cleanup
+}
+
+func TestResolveSolanaRpcURLRequiresRpcNode(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if got, err := resolveSolanaRpcURL(); err == nil {
+		t.Fatalf("resolveSolanaRpcURL() = %q, nil; want error", got)
+	}
+}
+
+func TestResolveSolanaRpcURLWithRow(t *testing.T) {
+	cleanup := setupSolanaRPCNode(t, " https://solana.example.com ")
+	defer cleanup()
+
+	got, err := resolveSolanaRpcURL()
+	if err != nil {
+		t.Fatalf("resolveSolanaRpcURL(): %v", err)
+	}
+	if got != "https://solana.example.com" {
+		t.Fatalf("resolveSolanaRpcURL() = %q, want https://solana.example.com", got)
+	}
+}
+
 func TestSolClientHealthy(t *testing.T) {
+	requireSolanaIntegration(t)
+
 	bodyData, err := SolRetryClient("getHealth", nil)
 	if err != nil {
 		t.Fatalf("SolRetryClient failed: %v", err)
@@ -33,6 +79,8 @@ func TestSolClientHealthy(t *testing.T) {
 }
 
 func TestSolClientGetSignaturesForAddress(t *testing.T) {
+	requireSolanaIntegration(t)
+
 	// Example wallet address (replace with actual test address)
 	address := "2uFTf9TZ8gd7Kg6hkb79TxfaeNpaAgpJ8uVHguv2Yweu"
 
@@ -57,6 +105,8 @@ func TestSolClientGetSignaturesForAddress(t *testing.T) {
 }
 
 func TestSolClientGetTransaction(t *testing.T) {
+	requireSolanaIntegration(t)
+
 	// Example transaction signature (replace with actual test signature)
 	sig := "2aEoNykk4ZJ27C3y7EDJiQUc7GFnnsMe7ofFzB73swGL8kTxSBFCnwzWw3jzr3BND7k8hx15fZHUUAbG1XemNFe5"
 
@@ -64,7 +114,6 @@ func TestSolClientGetTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SolRetryClient failed: %v", err)
 	}
-	fmt.Printf("%v\n", string(txData))
 
 	var result map[string]interface{}
 	err = json.Unmarshal(txData, &result)
@@ -78,6 +127,15 @@ func TestSolClientGetTransaction(t *testing.T) {
 	}
 
 	t.Logf("Transaction Info for signature %s: %v", sig, txInfo)
+}
+
+func requireSolanaIntegration(t *testing.T) {
+	t.Helper()
+	if testing.Short() || os.Getenv("RUN_SOLANA_INTEGRATION_TESTS") == "" {
+		t.Skip("set RUN_SOLANA_INTEGRATION_TESTS=1 to run Solana public RPC integration tests")
+	}
+	cleanup := setupSolanaRPCNode(t, "https://api.mainnet-beta.solana.com")
+	t.Cleanup(cleanup)
 }
 
 func TestFindATAAddress(t *testing.T) {
@@ -219,9 +277,7 @@ func TestAdjustAmount(t *testing.T) {
 }
 
 func TestParseTransferInfoFromInstruction_SplTransfer(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test")
-	}
+	requireSolanaIntegration(t)
 
 	// SPL Token "transfer" (no mint in instruction, must look up from postTokenBalances)
 	sig := "3tZTwLrvmiZ59h4UzyMHPd7DPux7t9eXZgkUvEfquaoSuERrPSRNzWuSHKQM2fbiCWFDGNqoLpu2kLZnfoegVpqN"
@@ -261,9 +317,7 @@ func TestParseTransferInfoFromInstruction_SplTransfer(t *testing.T) {
 }
 
 func TestParseTransferInfoFromInstruction_TransferChecked(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test")
-	}
+	requireSolanaIntegration(t)
 
 	// SPL Token "transferChecked" (has mint and tokenAmount in instruction)
 	sig := "2aEoNykk4ZJ27C3y7EDJiQUc7GFnnsMe7ofFzB73swGL8kTxSBFCnwzWw3jzr3BND7k8hx15fZHUUAbG1XemNFe5"
@@ -306,9 +360,7 @@ func TestParseTransferInfoFromInstruction_TransferChecked(t *testing.T) {
 }
 
 func TestParseTransferInfoFromInstruction_SystemTransfer(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test")
-	}
+	requireSolanaIntegration(t)
 
 	// System program SOL transfer
 	sig := "5pNMonUBvLVpxXTmyd5CGVBs49W6781g2ACnrCXhbmtz58KENYA7HSqu6hQkQweg3qQboRd8WAscphNAtiq9UtZZ"

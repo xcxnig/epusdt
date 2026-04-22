@@ -2,7 +2,7 @@ package controller
 
 import (
 	"errors"
-	"github.com/assimon/luuu/util/http"
+	"github.com/GMWalletApp/epusdt/util/http"
 	"github.com/gookit/validate"
 	"github.com/gookit/validate/locales/zhcn"
 	"github.com/gookit/validate/locales/zhtw"

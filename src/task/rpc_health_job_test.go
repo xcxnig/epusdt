@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/assimon/luuu/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 )
 
 // --------------- ParseAddress ---------------

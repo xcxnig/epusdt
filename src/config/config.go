@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/assimon/luuu/util/http_client"
+	"github.com/GMWalletApp/epusdt/util/http_client"
 	"github.com/spf13/viper"
 	"github.com/tidwall/gjson"
 )
@@ -36,7 +36,6 @@ var (
 	TgManage           int64
 	UsdtRate           float64
 	RateApiUrl         string
-	TRON_GRID_API_KEY  string
 	BuildVersion       = "0.0.0-dev"
 	BuildCommit        = "none"
 	BuildDate          = "unknown"
@@ -79,7 +78,6 @@ func Init() {
 	TgManage = viper.GetInt64("tg_manage")
 
 	RateApiUrl = GetRateApiUrl()
-	TRON_GRID_API_KEY = viper.GetString("tron_grid_api_key")
 }
 
 func mustMkdir(path string) {
@@ -397,16 +395,4 @@ func GetCallbackRetryBaseDuration() time.Duration {
 		seconds = 5
 	}
 	return time.Duration(seconds) * time.Second
-}
-
-func GetSolanaRpcUrl() string {
-	rpcUrl := viper.GetString("solana_rpc_url")
-	if rpcUrl == "" {
-		return "https://api.mainnet-beta.solana.com"
-	}
-	return rpcUrl
-}
-
-func GetEthereumWsUrl() string {
-	return strings.TrimSpace(viper.GetString("ethereum_ws_url"))
 }

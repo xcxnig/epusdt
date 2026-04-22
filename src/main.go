@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/assimon/luuu/command"
+	"github.com/GMWalletApp/epusdt/command"
 	"github.com/gookit/color"
 )
 

@@ -3,8 +3,8 @@ package data
 import (
 	"time"
 
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 )
 
 // DailyStat is one bucket of day-level aggregation used by the

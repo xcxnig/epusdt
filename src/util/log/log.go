@@ -2,7 +2,7 @@ package log
 
 import (
 	"fmt"
-	"github.com/assimon/luuu/config"
+	"github.com/GMWalletApp/epusdt/config"
 	"github.com/natefinch/lumberjack"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"

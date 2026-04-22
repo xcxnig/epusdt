@@ -1,8 +1,8 @@
 package admin
 
 import (
-	"github.com/assimon/luuu/controller"
-	"github.com/assimon/luuu/middleware"
+	"github.com/GMWalletApp/epusdt/controller"
+	"github.com/GMWalletApp/epusdt/middleware"
 	"github.com/labstack/echo/v4"
 )
 

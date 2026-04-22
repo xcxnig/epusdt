@@ -28,6 +28,7 @@ import (
 	"text/template"
 	"time"
 
+	luluHttp "github.com/GMWalletApp/epusdt/util/http"
 	"github.com/gookit/color"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -195,6 +196,9 @@ func RunInstallServer(listenAddr, envFilePath string) {
 		}
 	}
 	e.Use(middleware.StaticWithConfig(middleware.StaticConfig{
+		Skipper: func(c echo.Context) bool {
+			return luluHttp.ShouldSkipSPAFallback(c.Request().URL.Path)
+		},
 		HTML5: true,
 		Index: "index.html",
 		Root:  wwwRoot,

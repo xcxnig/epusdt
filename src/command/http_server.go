@@ -6,16 +6,17 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/assimon/luuu/bootstrap"
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/install"
-	"github.com/assimon/luuu/middleware"
-	"github.com/assimon/luuu/route"
-	"github.com/assimon/luuu/util/constant"
-	luluHttp "github.com/assimon/luuu/util/http"
-	"github.com/assimon/luuu/util/log"
+	"github.com/GMWalletApp/epusdt/bootstrap"
+	"github.com/GMWalletApp/epusdt/config"
+	"github.com/GMWalletApp/epusdt/install"
+	"github.com/GMWalletApp/epusdt/middleware"
+	"github.com/GMWalletApp/epusdt/route"
+	"github.com/GMWalletApp/epusdt/util/constant"
+	luluHttp "github.com/GMWalletApp/epusdt/util/http"
+	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/labstack/echo/v4"
 	echoMiddleware "github.com/labstack/echo/v4/middleware"
 	"github.com/spf13/cobra"
@@ -72,6 +73,15 @@ func HttpServerStart() {
 		}
 	}
 	e.Use(echoMiddleware.StaticWithConfig(echoMiddleware.StaticConfig{
+		Skipper: func(c echo.Context) bool {
+			path := c.Request().URL.Path
+			if path == "/install" || strings.HasPrefix(path, "/install/") {
+				// The install wizard is only served by install.RunInstallServer
+				// before bootstrap. Once main server starts, block /install.
+				return true
+			}
+			return luluHttp.ShouldSkipSPAFallback(path)
+		},
 		HTML5: true,
 		Index: "index.html",
 		Root:  wwwRoot,

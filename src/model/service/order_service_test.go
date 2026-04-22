@@ -6,12 +6,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/assimon/luuu/internal/testutil"
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/model/request"
-	"github.com/assimon/luuu/util/constant"
+	"github.com/GMWalletApp/epusdt/internal/testutil"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/request"
+	"github.com/GMWalletApp/epusdt/util/constant"
 )
 
 func newCreateTransactionRequest(orderID string, amount float64) *request.CreateTransactionRequest {

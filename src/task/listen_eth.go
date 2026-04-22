@@ -7,11 +7,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/model/service"
-	"github.com/assimon/luuu/util/log"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/service"
+	"github.com/GMWalletApp/epusdt/util/log"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -21,22 +20,6 @@ import (
 
 // Transfer 事件签名 — ERC-20 signature, same on every EVM chain.
 var transferEventHash = common.HexToHash("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
-
-const ethereumDefaultWsURL = "wss://ethereum.publicnode.com"
-
-// resolveEthereumWsURL picks a healthy WS endpoint. Falls back to the
-// legacy .env value (if set) before the shared default — keeps existing
-// deployments working until the admin adds an rpc_nodes row.
-func resolveEthereumWsURL() string {
-	node, err := data.SelectRpcNode(mdb.NetworkEthereum, mdb.RpcNodeTypeWs)
-	if err == nil && node != nil && node.ID > 0 {
-		return node.Url
-	}
-	if u := config.GetEthereumWsUrl(); u != "" {
-		return u
-	}
-	return ethereumDefaultWsURL
-}
 
 type ethRecipientSnapshot struct {
 	addrs map[string]struct{}
@@ -88,7 +71,10 @@ func runEthereumListener(contracts []common.Address) {
 		}
 	}()
 
-	wsURL := resolveEthereumWsURL()
+	wsURL, ok := resolveChainWsURL(mdb.NetworkEthereum, "[ETH-WS]")
+	if !ok {
+		return
+	}
 	log.Sugar.Infof("[ETH-WS] connecting to %s watching %d contract(s)", wsURL, len(contracts))
 
 	query := ethereum.FilterQuery{
@@ -145,4 +131,3 @@ func isWatchedEthRecipient(to common.Address) bool {
 	_, ok := snap.addrs[strings.ToLower(to.Hex())]
 	return ok
 }
-

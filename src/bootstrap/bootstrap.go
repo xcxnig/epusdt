@@ -3,14 +3,14 @@ package bootstrap
 import (
 	"sync"
 
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/mq"
-	"github.com/assimon/luuu/task"
-	"github.com/assimon/luuu/telegram"
-	appjwt "github.com/assimon/luuu/util/jwt"
-	"github.com/assimon/luuu/util/log"
+	"github.com/GMWalletApp/epusdt/config"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/mq"
+	"github.com/GMWalletApp/epusdt/task"
+	"github.com/GMWalletApp/epusdt/telegram"
+	appjwt "github.com/GMWalletApp/epusdt/util/jwt"
+	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/gookit/color"
 )
 
@@ -41,15 +41,15 @@ func InitApp() {
 		config.RateApiUrl = config.GetRateApiUrl()
 		// Seed admin account and JWT secret so the management console is
 		// immediately usable on a fresh install. Both are idempotent.
-		adminPwd, isNew, err := data.EnsureDefaultAdmin()
+		_, isNew, err := data.EnsureDefaultAdmin()
 		if err != nil {
 			color.Red.Printf("[bootstrap] ensure default admin err=%s\n", err)
 		}
 		if isNew {
 			color.Yellow.Println("╔════════════════════════════════════════════════════════════════════════╗")
-			color.Yellow.Println("║  Default admin account created. Change the password via admin console! ║")
+			color.Yellow.Println("║  Default admin account created. Fetch one-time password via API first!║")
 			color.Yellow.Printf("║  Username: admin                                                       ║\n")
-			color.Yellow.Printf("║  Password: %-60s ║\n", adminPwd)
+			color.Yellow.Println("║  GET /admin/api/v1/auth/init-password (one-time)                      ║")
 			color.Yellow.Println("╚════════════════════════════════════════════════════════════════════════╝")
 		}
 		if _, err := appjwt.EnsureSecret(); err != nil {

@@ -15,10 +15,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/assimon/epusdt/stargazers"><img src="https://img.shields.io/github/stars/assimon/epusdt?style=flat-square&color=f5c542" alt="GitHub Stars 3000+"></a>
+  <a href="https://github.com/GMWalletApp/epusdt/stargazers"><img src="https://img.shields.io/github/stars/GMWalletApp/epusdt?style=flat-square&color=f5c542" alt="GitHub Stars 3000+"></a>
   <a href="https://www.gnu.org/licenses/gpl-3.0.html"><img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3 License"></a>
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.16+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.16+"></a>
-  <a href="https://github.com/assimon/epusdt/releases"><img src="https://img.shields.io/github/v/release/assimon/epusdt?style=flat-square&color=green" alt="Latest Release"></a>
+  <a href="https://github.com/GMWalletApp/epusdt/releases"><img src="https://img.shields.io/github/v/release/GMWalletApp/epusdt?style=flat-square&color=green" alt="Latest Release"></a>
 </p>
 
 ---
@@ -42,7 +42,7 @@ Deploy it privately, integrate via HTTP API, and start receiving **crypto paymen
 | **Polygon** | USDT、USDC |
 | **更多** | 持续扩展中… |
 
-> 💡 具体支持的链与代币以 [最新版本](https://github.com/assimon/epusdt/releases) 及 [官方文档](https://epusdt.com) 为准。
+> 💡 具体支持的链与代币以 [最新版本](https://github.com/GMWalletApp/epusdt/releases) 及 [官方文档](https://epusdt.com) 为准。
 
 ---
 
@@ -123,7 +123,7 @@ Epusdt 通过监听多条区块链网络（TRC20、ERC20、BEP20、Polygon 等�
 
 ## 💬 社区与支持
 
-**遇到问题？** 请优先在 GitHub 提交 [Issue](https://github.com/assimon/epusdt/issues)，我们会**优先处理** Issue 中的反馈。
+**遇到问题？** 请优先在 GitHub 提交 [Issue](https://github.com/GMWalletApp/epusdt/issues)，我们会**优先处理** Issue 中的反馈。
 
 加入 Telegram 社区，获取最新开发动态，参与需求调研，与超过5000名活跃用户交流使用经验，对接商业资源：
 

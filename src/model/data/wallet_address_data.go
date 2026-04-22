@@ -3,9 +3,9 @@ package data
 import (
 	"strings"
 
-	"github.com/assimon/luuu/model/dao"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/util/constant"
+	"github.com/GMWalletApp/epusdt/model/dao"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/constant"
 )
 
 // AddWalletAddress 创建钱包 (默认 tron 网络，用于 Telegram 添加)

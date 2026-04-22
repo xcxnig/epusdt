@@ -7,18 +7,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/model/service"
-	"github.com/assimon/luuu/util/log"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/service"
+	"github.com/GMWalletApp/epusdt/util/log"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
-
-const bscDefaultWsURL = "wss://bsc.drpc.org"
 
 type bscRecipientSnapshot struct {
 	addrs map[string]struct{}
@@ -68,7 +66,10 @@ func runBscListener(contracts []common.Address) {
 		}
 	}()
 
-	wsURL := resolveChainWsURL(mdb.NetworkBsc, bscDefaultWsURL)
+	wsURL, ok := resolveChainWsURL(mdb.NetworkBsc, "[BSC-WS]")
+	if !ok {
+		return
+	}
 	log.Sugar.Infof("[BSC-WS] connecting to %s watching %d contract(s)", wsURL, len(contracts))
 
 	query := ethereum.FilterQuery{

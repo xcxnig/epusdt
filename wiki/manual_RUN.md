@@ -8,7 +8,7 @@ cd /var/www/
 mkdir epusdt
 chmod 777 -R /var/www/epusdt
 cd epusdt
-wget https://github.com/assimon/epusdt/releases/download/v0.0.3/epusdt_0.0.3_Linux_x86_64.tar.gz
+wget https://github.com/GMWalletApp/epusdt/releases/download/v0.0.3/epusdt_0.0.3_Linux_x86_64.tar.gz
 tar -xzf epusdt_0.0.3_Linux_x86_64.tar.gz
 rm epusdt_0.0.3_Linux_x86_64.tar.gz
 ```
@@ -206,7 +206,7 @@ supervisorctl tail epusdt
  | |___| |_) | |_| \__ \ (_| | |_ 
  |_____| .__/ \__,_|___/\__,_|\__|
        |_|                        
-Epusdt version(0.0.2) Powered by assimon https://github.com/assimon/epusdt 
+Epusdt version(0.0.2) Powered by GMWalletApp https://github.com/GMWalletApp/epusdt
 ⇨ http server started on [::]:8000
 ```
 ## 其他注意事项

@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/assimon/luuu/controller/admin"
-	"github.com/assimon/luuu/controller/comm"
-	"github.com/assimon/luuu/middleware"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/util/constant"
-	"github.com/assimon/luuu/util/sign"
+	"github.com/GMWalletApp/epusdt/controller/admin"
+	"github.com/GMWalletApp/epusdt/controller/comm"
+	"github.com/GMWalletApp/epusdt/middleware"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/constant"
+	"github.com/GMWalletApp/epusdt/util/sign"
 	"github.com/labstack/echo/v4"
 	echoMiddleware "github.com/labstack/echo/v4/middleware"
 )
@@ -188,6 +188,8 @@ func registerAdminRoutes(e *echo.Echo) {
 
 	// Public (no JWT)
 	adminV1.POST("/auth/login", admin.Ctrl.Login)
+	adminV1.GET("/auth/init-password", admin.Ctrl.GetInitialPassword)
+	adminV1.GET("/auth/init-password-hash", admin.Ctrl.GetInitialPasswordHash)
 
 	// Authenticated
 	authed := adminV1.Group("", middleware.CheckAdminJWT())

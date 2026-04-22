@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/notify"
-	"github.com/assimon/luuu/telegram"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/notify"
+	"github.com/GMWalletApp/epusdt/telegram"
 	"github.com/labstack/echo/v4"
 )
 

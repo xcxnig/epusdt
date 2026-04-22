@@ -3,10 +3,10 @@ package service
 import (
 	"errors"
 
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/model/response"
+	"github.com/GMWalletApp/epusdt/config"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/response"
 )
 
 var ErrOrder = errors.New("不存在待支付订单或已过期")

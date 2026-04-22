@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/model/response"
-	"github.com/assimon/luuu/model/service"
+	"github.com/GMWalletApp/epusdt/config"
+	"github.com/GMWalletApp/epusdt/model/response"
+	"github.com/GMWalletApp/epusdt/model/service"
 	"github.com/labstack/echo/v4"
 )
 

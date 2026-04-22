@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/assimon/luuu/middleware"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/model/request"
-	"github.com/assimon/luuu/model/service"
-	"github.com/assimon/luuu/util/constant"
-	"github.com/assimon/luuu/util/log"
+	"github.com/GMWalletApp/epusdt/middleware"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/request"
+	"github.com/GMWalletApp/epusdt/model/service"
+	"github.com/GMWalletApp/epusdt/util/constant"
+	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/labstack/echo/v4"
 )
 

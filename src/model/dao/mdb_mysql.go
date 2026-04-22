@@ -3,8 +3,8 @@ package dao
 import (
 	"time"
 
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/util/log"
+	"github.com/GMWalletApp/epusdt/config"
+	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/gookit/color"
 	"github.com/spf13/viper"
 	"gorm.io/driver/mysql"

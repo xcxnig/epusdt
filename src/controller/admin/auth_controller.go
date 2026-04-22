@@ -3,9 +3,9 @@ package admin
 import (
 	"errors"
 
-	"github.com/assimon/luuu/model/data"
-	"github.com/assimon/luuu/model/mdb"
-	appjwt "github.com/assimon/luuu/util/jwt"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	appjwt "github.com/GMWalletApp/epusdt/util/jwt"
 	"github.com/labstack/echo/v4"
 )
 
@@ -32,6 +32,12 @@ type ChangePasswordRequest struct {
 type MeResponse struct {
 	mdb.AdminUser
 	PasswordIsDefault bool `json:"password_is_default" example:"true"`
+}
+
+// InitialPasswordResponse is returned by the one-time initial password API.
+type InitialPasswordResponse struct {
+	Username string `json:"username" example:"admin"`
+	Password string `json:"password" example:"a1b2c3d4e5f6"`
 }
 
 // Login verifies credentials, stamps last_login_at, returns a signed JWT.
@@ -77,6 +83,42 @@ func (c *BaseAdminController) Login(ctx echo.Context) error {
 	})
 }
 
+// GetInitialPassword returns the one-time initial admin password.
+// @Summary      Get initial admin password (one-time)
+// @Description  Returns the initial random admin password once, then invalidates it.
+// @Tags         Admin Auth
+// @Produce      json
+// @Success      200 {object} response.ApiResponse{data=admin.InitialPasswordResponse}
+// @Failure      400 {object} response.ApiResponse
+// @Router       /admin/api/v1/auth/init-password [get]
+func (c *BaseAdminController) GetInitialPassword(ctx echo.Context) error {
+	password, err := data.ConsumeInitialAdminPassword()
+	if err != nil {
+		return c.FailJson(ctx, err)
+	}
+	return c.SucJson(ctx, InitialPasswordResponse{
+		Username: "admin",
+		Password: password,
+	})
+}
+
+// GetInitialPasswordHash returns the initial-password fingerprint so the
+// frontend can warn until the password is changed.
+// @Summary      Get initial admin password hash
+// @Description  Returns the initial password hash and password-changed flag.
+// @Tags         Admin Auth
+// @Produce      json
+// @Success      200 {object} response.ApiResponse{data=data.InitialAdminPasswordHashInfo}
+// @Failure      400 {object} response.ApiResponse
+// @Router       /admin/api/v1/auth/init-password-hash [get]
+func (c *BaseAdminController) GetInitialPasswordHash(ctx echo.Context) error {
+	info, err := data.GetInitialAdminPasswordHashInfo()
+	if err != nil {
+		return c.FailJson(ctx, err)
+	}
+	return c.SucJson(ctx, info)
+}
+
 // Logout is a no-op stub — tokens are stateless and the frontend
 // discards them. Kept for API symmetry with the documented spec.
 // @Summary      Admin logout
@@ -111,9 +153,9 @@ func (c *BaseAdminController) Me(ctx echo.Context) error {
 	if user.ID == 0 {
 		return c.FailJson(ctx, errors.New("user not found"))
 	}
-	// Warn the frontend when the operator hasn't changed the default
-	// password so the UI can show a prominent reminder.
-	isDefault := data.VerifyPassword(user.PasswordHash, "admin")
+	// Warn the frontend when the operator hasn't changed the seeded
+	// initial password.
+	isDefault := data.IsUsingInitialAdminPassword()
 	return c.SucJson(ctx, MeResponse{
 		AdminUser:         *user,
 		PasswordIsDefault: isDefault,

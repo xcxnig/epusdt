@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/assimon/luuu/model/data"
+	"github.com/GMWalletApp/epusdt/model/data"
 	"github.com/labstack/echo/v4"
 )
 

@@ -1,9 +1,9 @@
 package dao
 
 import (
-	"github.com/assimon/luuu/config"
-	"github.com/assimon/luuu/model/mdb"
-	"github.com/assimon/luuu/util/log"
+	"github.com/GMWalletApp/epusdt/config"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/gookit/color"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
