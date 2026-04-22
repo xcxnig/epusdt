@@ -35,7 +35,7 @@ jobs:
             type=raw,value=alpine
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch,suffix=-alpine
-            type=ref,event=tag,suffix=-alpine
+            type=ref,event=tag
             type=sha,prefix=sha-,suffix=-alpine
 
       - name: Login To Docker Hub
