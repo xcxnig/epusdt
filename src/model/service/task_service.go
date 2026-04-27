@@ -13,7 +13,6 @@ import (
 	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/GMWalletApp/epusdt/util/math"
-	"github.com/dromara/carbon/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 )
