@@ -177,6 +177,60 @@ func TestResolveConfigFilePathPrefersExplicitOverEnv(t *testing.T) {
 	}
 }
 
+func TestCopyMissingStaticFilesCopiesAssetsWithoutOverwriting(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "app-static")
+	dst := filepath.Join(root, "data-static")
+
+	if err := os.MkdirAll(filepath.Join(src, "images"), 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "index.html"), []byte("source-index"), 0o644); err != nil {
+		t.Fatalf("write source index: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "payment.js"), []byte("source-payment"), 0o644); err != nil {
+		t.Fatalf("write source payment: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "images", "logo.png"), []byte("source-logo"), 0o644); err != nil {
+		t.Fatalf("write source logo: %v", err)
+	}
+
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("mkdir destination: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "index.html"), []byte("custom-index"), 0o644); err != nil {
+		t.Fatalf("write existing destination index: %v", err)
+	}
+
+	if err := copyMissingStaticFiles(src, dst); err != nil {
+		t.Fatalf("copy missing static files: %v", err)
+	}
+
+	index, err := os.ReadFile(filepath.Join(dst, "index.html"))
+	if err != nil {
+		t.Fatalf("read destination index: %v", err)
+	}
+	if string(index) != "custom-index" {
+		t.Fatalf("existing index was overwritten: %q", string(index))
+	}
+
+	payment, err := os.ReadFile(filepath.Join(dst, "payment.js"))
+	if err != nil {
+		t.Fatalf("read copied payment: %v", err)
+	}
+	if string(payment) != "source-payment" {
+		t.Fatalf("payment.js = %q, want source-payment", string(payment))
+	}
+
+	logo, err := os.ReadFile(filepath.Join(dst, "images", "logo.png"))
+	if err != nil {
+		t.Fatalf("read copied nested asset: %v", err)
+	}
+	if string(logo) != "source-logo" {
+		t.Fatalf("logo.png = %q, want source-logo", string(logo))
+	}
+}
+
 func TestGetUsdtRatePrefersPositiveAdminOverride(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)

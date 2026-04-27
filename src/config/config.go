@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -62,6 +63,9 @@ func Init() {
 	LogLevel = normalizeLogLevel(viper.GetString("log_level"))
 	StaticPath = normalizeStaticURLPath(viper.GetString("static_path"))
 	StaticFilePath = filepath.Join(configRootPath, strings.TrimPrefix(StaticPath, "/"))
+	if err = ensureConfiguredStaticFiles(); err != nil {
+		panic(err)
+	}
 	RuntimePath = resolvePathFromBase(configRootPath, viper.GetString("runtime_root_path"), filepath.Join(configRootPath, "runtime"))
 	LogSavePath = resolvePathFromBase(RuntimePath, viper.GetString("log_save_path"), filepath.Join(RuntimePath, "logs"))
 	mustMkdir(RuntimePath)
@@ -80,6 +84,93 @@ func mustMkdir(path string) {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		panic(err)
 	}
+}
+
+func ensureConfiguredStaticFiles() error {
+	if strings.TrimSpace(StaticFilePath) == "" {
+		return nil
+	}
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return err
+	}
+
+	srcDir := filepath.Join(filepath.Dir(exePath), "static")
+	srcInfo, err := os.Stat(srcDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !srcInfo.IsDir() {
+		return nil
+	}
+
+	srcAbs, err := filepath.Abs(srcDir)
+	if err != nil {
+		return err
+	}
+	dstAbs, err := filepath.Abs(StaticFilePath)
+	if err != nil {
+		return err
+	}
+	if srcAbs == dstAbs {
+		return nil
+	}
+
+	return copyMissingStaticFiles(srcAbs, dstAbs)
+}
+
+func copyMissingStaticFiles(srcDir, dstDir string) error {
+	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		dstPath := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dstPath, 0o755)
+		}
+		if _, err = os.Stat(dstPath); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err = os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+			return err
+		}
+		return copyFile(path, dstPath)
+	})
+}
+
+func copyFile(srcPath, dstPath string) error {
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return err
+	}
+
+	if _, err = io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func normalizeLogLevel(level string) string {
