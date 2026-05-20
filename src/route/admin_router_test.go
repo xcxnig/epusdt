@@ -2,6 +2,7 @@ package route
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"github.com/GMWalletApp/epusdt/model/dao"
 	"github.com/GMWalletApp/epusdt/model/data"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/service"
 	"github.com/labstack/echo/v4"
 )
 
@@ -647,6 +649,138 @@ func TestAdminOrders_MarkPaidNotFound(t *testing.T) {
 	}
 }
 
+func TestAdminOrders_MarkPaidSuccessAfterVerification(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	order := &mdb.Orders{
+		TradeId:        "trade-admin-mark-paid-ok",
+		OrderId:        "order-admin-mark-paid-ok",
+		Amount:         10,
+		Currency:       "CNY",
+		ActualAmount:   1.23,
+		ReceiveAddress: "TTestTronAddress001",
+		Token:          "USDT",
+		Network:        mdb.NetworkTron,
+		Status:         mdb.StatusWaitPay,
+		NotifyUrl:      "https://merchant.example/notify",
+		PayProvider:    mdb.PaymentProviderOnChain,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+
+	verified := false
+	restore := service.SetManualOrderPaymentValidatorForTest(func(got *mdb.Orders, blockID string) (string, error) {
+		verified = true
+		if got.TradeId != order.TradeId {
+			t.Fatalf("validator trade_id = %s, want %s", got.TradeId, order.TradeId)
+		}
+		if blockID != "block-admin-ok" {
+			t.Fatalf("validator block id = %s, want block-admin-ok", blockID)
+		}
+		return "canonical-block-admin-ok", nil
+	})
+	defer restore()
+
+	rec := doPostAdmin(e, "/admin/api/v1/orders/"+order.TradeId+"/mark-paid", map[string]interface{}{
+		"block_transaction_id": "block-admin-ok",
+	}, token)
+	t.Logf("MarkOrderPaid success: status=%d body=%s", rec.Code, rec.Body.String())
+	assertOK(t, rec)
+	if !verified {
+		t.Fatal("expected chain verifier to be called")
+	}
+
+	paid, err := data.GetOrderInfoByTradeId(order.TradeId)
+	if err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if paid.Status != mdb.StatusPaySuccess {
+		t.Fatalf("status = %d, want %d", paid.Status, mdb.StatusPaySuccess)
+	}
+	if paid.BlockTransactionId != "canonical-block-admin-ok" {
+		t.Fatalf("block_transaction_id = %q", paid.BlockTransactionId)
+	}
+	if paid.CallBackConfirm != mdb.CallBackConfirmNo {
+		t.Fatalf("callback_confirm = %d, want %d", paid.CallBackConfirm, mdb.CallBackConfirmNo)
+	}
+}
+
+func TestAdminOrders_MarkPaidRejectsVerificationFailure(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	order := &mdb.Orders{
+		TradeId:        "trade-admin-mark-paid-bad-proof",
+		OrderId:        "order-admin-mark-paid-bad-proof",
+		Amount:         10,
+		Currency:       "CNY",
+		ActualAmount:   1.23,
+		ReceiveAddress: "TTestTronAddress001",
+		Token:          "USDT",
+		Network:        mdb.NetworkTron,
+		Status:         mdb.StatusWaitPay,
+		NotifyUrl:      "https://merchant.example/notify",
+		PayProvider:    mdb.PaymentProviderOnChain,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+	restore := service.SetManualOrderPaymentValidatorForTest(func(*mdb.Orders, string) (string, error) {
+		return "", errors.New("transaction amount mismatch")
+	})
+	defer restore()
+
+	rec := doPostAdmin(e, "/admin/api/v1/orders/"+order.TradeId+"/mark-paid", map[string]interface{}{
+		"block_transaction_id": "block-admin-bad",
+	}, token)
+	t.Logf("MarkOrderPaid verifier failure: status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected failure, got 200: %s", rec.Body.String())
+	}
+	reloaded, err := data.GetOrderInfoByTradeId(order.TradeId)
+	if err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if reloaded.Status != mdb.StatusWaitPay || reloaded.BlockTransactionId != "" {
+		t.Fatalf("order changed after failed verification: status=%d block=%q", reloaded.Status, reloaded.BlockTransactionId)
+	}
+}
+
+func TestAdminOrders_MarkPaidRejectsNonOnChainOrder(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	order := &mdb.Orders{
+		TradeId:        "trade-admin-mark-paid-provider",
+		OrderId:        "order-admin-mark-paid-provider",
+		Amount:         10,
+		Currency:       "CNY",
+		ActualAmount:   1.23,
+		ReceiveAddress: "TTestTronAddress001",
+		Token:          "USDT",
+		Network:        mdb.NetworkTron,
+		Status:         mdb.StatusWaitPay,
+		NotifyUrl:      "https://merchant.example/notify",
+		PayProvider:    mdb.PaymentProviderOkPay,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+	called := false
+	restore := service.SetManualOrderPaymentValidatorForTest(func(*mdb.Orders, string) (string, error) {
+		called = true
+		return "block-admin-provider", nil
+	})
+	defer restore()
+
+	rec := doPostAdmin(e, "/admin/api/v1/orders/"+order.TradeId+"/mark-paid", map[string]interface{}{
+		"block_transaction_id": "block-admin-provider",
+	}, token)
+	t.Logf("MarkOrderPaid provider order: status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected failure, got 200: %s", rec.Body.String())
+	}
+	if called {
+		t.Fatal("verifier should not run for non-on-chain order")
+	}
+}
+
 // TestAdminOrders_ResendCallbackNotFound verifies resend-callback graceful error.
 func TestAdminOrders_ResendCallbackNotFound(t *testing.T) {
 	e, token := setupAdminTestEnv(t)
@@ -654,6 +788,59 @@ func TestAdminOrders_ResendCallbackNotFound(t *testing.T) {
 	t.Logf("ResendCallback (not found): status=%d body=%s", rec.Code, rec.Body.String())
 	if rec.Code >= 500 {
 		t.Fatalf("unexpected server error: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminOrders_ResendCallbackRejectsEmptyNotifyURL(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	order := &mdb.Orders{
+		TradeId:         "trade-admin-resend-empty-url",
+		OrderId:         "order-admin-resend-empty-url",
+		Status:          mdb.StatusPaySuccess,
+		CallBackConfirm: mdb.CallBackConfirmOk,
+		CallbackNum:     3,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+
+	rec := doPostAdmin(e, "/admin/api/v1/orders/"+order.TradeId+"/resend-callback", nil, token)
+	t.Logf("ResendCallback empty notify_url: status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected failure, got 200: %s", rec.Body.String())
+	}
+	reloaded, err := data.GetOrderInfoByTradeId(order.TradeId)
+	if err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if reloaded.CallBackConfirm != mdb.CallBackConfirmOk || reloaded.CallbackNum != 3 {
+		t.Fatalf("callback state changed: confirm=%d num=%d", reloaded.CallBackConfirm, reloaded.CallbackNum)
+	}
+}
+
+func TestAdminOrders_ResendCallbackRequeuesPaidOrder(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	order := &mdb.Orders{
+		TradeId:         "trade-admin-resend-ok",
+		OrderId:         "order-admin-resend-ok",
+		Status:          mdb.StatusPaySuccess,
+		NotifyUrl:       "https://merchant.example/notify",
+		CallBackConfirm: mdb.CallBackConfirmOk,
+		CallbackNum:     3,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+
+	rec := doPostAdmin(e, "/admin/api/v1/orders/"+order.TradeId+"/resend-callback", nil, token)
+	t.Logf("ResendCallback success: status=%d body=%s", rec.Code, rec.Body.String())
+	assertOK(t, rec)
+	reloaded, err := data.GetOrderInfoByTradeId(order.TradeId)
+	if err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if reloaded.CallBackConfirm != mdb.CallBackConfirmNo || reloaded.CallbackNum != 0 {
+		t.Fatalf("callback state = confirm %d num %d, want no/0", reloaded.CallBackConfirm, reloaded.CallbackNum)
 	}
 }
 

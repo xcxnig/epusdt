@@ -9,7 +9,7 @@ const (
 	NetworkTron     = "tron"
 	NetworkSolana   = "solana"
 	NetworkEthereum = "ethereum"
-	NetworkBsc      = "bsc"
+	NetworkBsc      = "binance"
 	NetworkPolygon  = "polygon"
 	NetworkPlasma   = "plasma"
 )

@@ -13,6 +13,7 @@ import (
 	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/model/request"
 	"github.com/GMWalletApp/epusdt/model/service"
+	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/labstack/echo/v4"
 )
 
@@ -147,23 +148,43 @@ func (c *BaseAdminController) CloseOrder(ctx echo.Context) error {
 // @Router       /admin/api/v1/orders/{trade_id}/mark-paid [post]
 func (c *BaseAdminController) MarkOrderPaid(ctx echo.Context) error {
 	tradeID := ctx.Param("trade_id")
+	adminUserID := currentAdminUserID(ctx)
 	req := new(MarkPaidRequest)
 	if err := ctx.Bind(req); err != nil {
+		log.Sugar.Warnf("[admin-order] mark-paid bind failed admin_user_id=%d trade_id=%s err=%v", adminUserID, tradeID, err)
 		return c.FailJson(ctx, err)
 	}
+	req.BlockTransactionId = strings.TrimSpace(req.BlockTransactionId)
 	if err := c.ValidateStruct(ctx, req); err != nil {
+		log.Sugar.Warnf("[admin-order] mark-paid validation failed admin_user_id=%d trade_id=%s block_transaction_id=%s err=%v", adminUserID, tradeID, req.BlockTransactionId, err)
 		return c.FailJson(ctx, err)
 	}
 	order, err := data.GetOrderInfoByTradeId(tradeID)
 	if err != nil {
+		log.Sugar.Warnf("[admin-order] mark-paid load failed admin_user_id=%d trade_id=%s block_transaction_id=%s err=%v", adminUserID, tradeID, req.BlockTransactionId, err)
 		return c.FailJson(ctx, err)
 	}
 	if order.ID == 0 {
-		return c.FailJson(ctx, errors.New("order not found"))
+		err = errors.New("order not found")
+		log.Sugar.Warnf("[admin-order] mark-paid rejected admin_user_id=%d trade_id=%s block_transaction_id=%s err=%v", adminUserID, tradeID, req.BlockTransactionId, err)
+		return c.FailJson(ctx, err)
 	}
 	if order.Status != mdb.StatusWaitPay {
-		return c.FailJson(ctx, errors.New("order is not waiting payment"))
+		err = errors.New("order is not waiting payment")
+		log.Sugar.Warnf("[admin-order] mark-paid rejected admin_user_id=%d trade_id=%s status=%d block_transaction_id=%s err=%v", adminUserID, tradeID, order.Status, req.BlockTransactionId, err)
+		return c.FailJson(ctx, err)
 	}
+	if !isOnChainOrder(order.PayProvider) {
+		err = errors.New("order is not an on-chain payment order")
+		log.Sugar.Warnf("[admin-order] mark-paid rejected admin_user_id=%d trade_id=%s pay_provider=%s block_transaction_id=%s err=%v", adminUserID, tradeID, order.PayProvider, req.BlockTransactionId, err)
+		return c.FailJson(ctx, err)
+	}
+	verifiedBlockTransactionID, err := service.ValidateManualOrderPayment(order, req.BlockTransactionId)
+	if err != nil {
+		log.Sugar.Warnf("[admin-order] mark-paid chain verification failed admin_user_id=%d trade_id=%s network=%s token=%s amount=%.8f block_transaction_id=%s err=%v", adminUserID, tradeID, order.Network, order.Token, order.ActualAmount, req.BlockTransactionId, err)
+		return c.FailJson(ctx, err)
+	}
+	req.BlockTransactionId = verifiedBlockTransactionID
 	err = service.OrderProcessing(&request.OrderProcessingRequest{
 		ReceiveAddress:     order.ReceiveAddress,
 		Currency:           order.Currency,
@@ -174,8 +195,10 @@ func (c *BaseAdminController) MarkOrderPaid(ctx echo.Context) error {
 		BlockTransactionId: req.BlockTransactionId,
 	})
 	if err != nil {
+		log.Sugar.Warnf("[admin-order] mark-paid processing failed admin_user_id=%d trade_id=%s block_transaction_id=%s err=%v", adminUserID, tradeID, req.BlockTransactionId, err)
 		return c.FailJson(ctx, err)
 	}
+	log.Sugar.Infof("[admin-order] mark-paid success admin_user_id=%d trade_id=%s block_transaction_id=%s", adminUserID, tradeID, req.BlockTransactionId)
 	return c.SucJson(ctx, nil)
 }
 
@@ -193,14 +216,44 @@ func (c *BaseAdminController) MarkOrderPaid(ctx echo.Context) error {
 // @Router       /admin/api/v1/orders/{trade_id}/resend-callback [post]
 func (c *BaseAdminController) ResendCallback(ctx echo.Context) error {
 	tradeID := ctx.Param("trade_id")
+	adminUserID := currentAdminUserID(ctx)
+	order, err := data.GetOrderInfoByTradeId(tradeID)
+	if err != nil {
+		log.Sugar.Warnf("[admin-order] resend-callback load failed admin_user_id=%d trade_id=%s err=%v", adminUserID, tradeID, err)
+		return c.FailJson(ctx, err)
+	}
+	if order.ID == 0 {
+		err = errors.New("order not found")
+		log.Sugar.Warnf("[admin-order] resend-callback rejected admin_user_id=%d trade_id=%s err=%v", adminUserID, tradeID, err)
+		return c.FailJson(ctx, err)
+	}
+	if order.Status != mdb.StatusPaySuccess {
+		err = errors.New("order is not paid (callback not applicable)")
+		log.Sugar.Warnf("[admin-order] resend-callback rejected admin_user_id=%d trade_id=%s status=%d err=%v", adminUserID, tradeID, order.Status, err)
+		return c.FailJson(ctx, err)
+	}
+	if strings.TrimSpace(order.NotifyUrl) == "" {
+		err = errors.New("order has empty notify_url")
+		log.Sugar.Warnf("[admin-order] resend-callback rejected admin_user_id=%d trade_id=%s err=%v", adminUserID, tradeID, err)
+		return c.FailJson(ctx, err)
+	}
 	ok, err := data.ReopenOrderCallback(tradeID)
 	if err != nil {
+		log.Sugar.Warnf("[admin-order] resend-callback reopen failed admin_user_id=%d trade_id=%s err=%v", adminUserID, tradeID, err)
 		return c.FailJson(ctx, err)
 	}
 	if !ok {
-		return c.FailJson(ctx, errors.New("order is not paid (callback not applicable)"))
+		err = errors.New("resend callback failed (concurrent state change)")
+		log.Sugar.Warnf("[admin-order] resend-callback rejected admin_user_id=%d trade_id=%s err=%v", adminUserID, tradeID, err)
+		return c.FailJson(ctx, err)
 	}
+	log.Sugar.Infof("[admin-order] resend-callback queued admin_user_id=%d trade_id=%s", adminUserID, tradeID)
 	return c.SucJson(ctx, nil)
+}
+
+func isOnChainOrder(payProvider string) bool {
+	payProvider = strings.TrimSpace(payProvider)
+	return payProvider == "" || payProvider == mdb.PaymentProviderOnChain
 }
 
 // ExportOrders streams matching orders as CSV. No pagination — the

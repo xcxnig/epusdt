@@ -108,6 +108,56 @@ func GetOrderByBlockIdWithTransaction(tx *gorm.DB, blockID string) (*mdb.Orders,
 	return order, err
 }
 
+// GetOrderByBlockTransactionIDs fetches the first order whose stored tx id
+// matches any equivalent spelling supplied by the caller.
+func GetOrderByBlockTransactionIDs(blockIDs []string) (*mdb.Orders, error) {
+	order := new(mdb.Orders)
+	seen := make(map[string]struct{}, len(blockIDs))
+	candidates := make([]string, 0, len(blockIDs))
+	for _, blockID := range blockIDs {
+		blockID = strings.TrimSpace(blockID)
+		if blockID == "" {
+			continue
+		}
+		if _, ok := seen[blockID]; ok {
+			continue
+		}
+		seen[blockID] = struct{}{}
+		candidates = append(candidates, blockID)
+	}
+	if len(candidates) == 0 {
+		return order, nil
+	}
+	err := dao.Mdb.Model(order).Where("block_transaction_id IN ?", candidates).Limit(1).Find(order).Error
+	return order, err
+}
+
+// GetOrderByBlockTransactionIDsCaseInsensitive fetches the first order whose
+// stored tx id matches any candidate after ASCII case folding. This is used
+// only for hex-based chain tx ids; case-sensitive signatures must keep using
+// GetOrderByBlockTransactionIDs.
+func GetOrderByBlockTransactionIDsCaseInsensitive(blockIDs []string) (*mdb.Orders, error) {
+	order := new(mdb.Orders)
+	seen := make(map[string]struct{}, len(blockIDs))
+	candidates := make([]string, 0, len(blockIDs))
+	for _, blockID := range blockIDs {
+		blockID = strings.ToLower(strings.TrimSpace(blockID))
+		if blockID == "" {
+			continue
+		}
+		if _, ok := seen[blockID]; ok {
+			continue
+		}
+		seen[blockID] = struct{}{}
+		candidates = append(candidates, blockID)
+	}
+	if len(candidates) == 0 {
+		return order, nil
+	}
+	err := dao.Mdb.Model(order).Where("LOWER(block_transaction_id) IN ?", candidates).Limit(1).Find(order).Error
+	return order, err
+}
+
 // OrderSuccessWithTransaction marks an order as paid only if it is still waiting for payment.
 func OrderSuccessWithTransaction(tx *gorm.DB, req *request.OrderProcessingRequest) (bool, error) {
 	result := tx.Model(&mdb.Orders{}).

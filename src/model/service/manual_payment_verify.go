@@ -1,0 +1,832 @@
+package service
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math/big"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	tron "github.com/GMWalletApp/epusdt/crypto"
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/constant"
+	"github.com/GMWalletApp/epusdt/util/math"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/shopspring/decimal"
+	"github.com/tidwall/gjson"
+)
+
+const manualVerifyRequestTimeout = 15 * time.Second
+
+var erc20TransferEventHash = common.HexToHash("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
+
+var (
+	manualOrderPaymentValidatorMu sync.Mutex
+	manualOrderPaymentValidator   manualOrderPaymentValidatorFunc = validateManualOrderPaymentDefault
+)
+
+type manualOrderPaymentValidatorFunc func(*mdb.Orders, string) (string, error)
+
+// ValidateManualOrderPayment verifies that the supplied chain transaction
+// really settles the order before an admin manually marks it paid. It returns
+// the canonical transaction id that should be persisted for duplicate checks.
+func ValidateManualOrderPayment(order *mdb.Orders, blockTransactionID string) (string, error) {
+	manualOrderPaymentValidatorMu.Lock()
+	validator := manualOrderPaymentValidator
+	manualOrderPaymentValidatorMu.Unlock()
+	return validator(order, blockTransactionID)
+}
+
+// SetManualOrderPaymentValidatorForTest swaps the chain verifier in tests so
+// route/controller tests don't depend on public RPC availability.
+func SetManualOrderPaymentValidatorForTest(fn func(*mdb.Orders, string) (string, error)) func() {
+	manualOrderPaymentValidatorMu.Lock()
+	old := manualOrderPaymentValidator
+	if fn == nil {
+		manualOrderPaymentValidator = validateManualOrderPaymentDefault
+	} else {
+		manualOrderPaymentValidator = fn
+	}
+	manualOrderPaymentValidatorMu.Unlock()
+	return func() {
+		manualOrderPaymentValidatorMu.Lock()
+		manualOrderPaymentValidator = old
+		manualOrderPaymentValidatorMu.Unlock()
+	}
+}
+
+func validateManualOrderPaymentDefault(order *mdb.Orders, blockTransactionID string) (string, error) {
+	if order == nil || order.ID == 0 {
+		return "", fmt.Errorf("order not found")
+	}
+	txID := strings.TrimSpace(blockTransactionID)
+	if txID == "" {
+		return "", fmt.Errorf("block_transaction_id is required")
+	}
+
+	var canonicalTxID string
+	var err error
+	switch strings.ToLower(strings.TrimSpace(order.Network)) {
+	case mdb.NetworkTron:
+		canonicalTxID, err = validateManualTronPayment(order, txID)
+	case mdb.NetworkSolana:
+		canonicalTxID, err = validateManualSolanaPayment(order, txID)
+	case mdb.NetworkEthereum, mdb.NetworkBsc, mdb.NetworkPolygon, mdb.NetworkPlasma:
+		canonicalTxID, err = validateManualEvmPayment(order, txID)
+	default:
+		return "", fmt.Errorf("unsupported manual payment verification network: %s", order.Network)
+	}
+	if err != nil {
+		return "", err
+	}
+	if err = ensureManualBlockTransactionUnused(order, canonicalTxID); err != nil {
+		return "", err
+	}
+	return canonicalTxID, nil
+}
+
+func ensureManualBlockTransactionUnused(order *mdb.Orders, canonicalTxID string) error {
+	candidates := equivalentManualBlockTransactionIDs(order.Network, canonicalTxID)
+	var existing *mdb.Orders
+	var err error
+	if manualBlockTransactionIDIsHex(order.Network) {
+		existing, err = data.GetOrderByBlockTransactionIDsCaseInsensitive(candidates)
+	} else {
+		existing, err = data.GetOrderByBlockTransactionIDs(candidates)
+	}
+	if err != nil {
+		return err
+	}
+	if existing.ID > 0 && existing.ID != order.ID {
+		return constant.OrderBlockAlreadyProcess
+	}
+	return nil
+}
+
+func manualBlockTransactionIDIsHex(network string) bool {
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case mdb.NetworkTron, mdb.NetworkEthereum, mdb.NetworkBsc, mdb.NetworkPolygon, mdb.NetworkPlasma:
+		return true
+	default:
+		return false
+	}
+}
+
+func equivalentManualBlockTransactionIDs(network, canonicalTxID string) []string {
+	network = strings.ToLower(strings.TrimSpace(network))
+	canonicalTxID = strings.TrimSpace(canonicalTxID)
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 6)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+
+	add(canonicalTxID)
+	switch network {
+	case mdb.NetworkEthereum, mdb.NetworkBsc, mdb.NetworkPolygon, mdb.NetworkPlasma:
+		body := strings.TrimPrefix(strings.TrimPrefix(canonicalTxID, "0x"), "0X")
+		body = strings.ToLower(body)
+		add("0x" + body)
+		add("0x" + strings.ToUpper(body))
+		add("0X" + body)
+		add("0X" + strings.ToUpper(body))
+		add(body)
+		add(strings.ToUpper(body))
+	case mdb.NetworkTron:
+		body := strings.TrimPrefix(strings.TrimPrefix(canonicalTxID, "0x"), "0X")
+		body = strings.ToLower(body)
+		add(body)
+		add(strings.ToUpper(body))
+		add("0x" + body)
+		add("0x" + strings.ToUpper(body))
+		add("0X" + body)
+		add("0X" + strings.ToUpper(body))
+	}
+	return out
+}
+
+func validateManualEvmPayment(order *mdb.Orders, txID string) (string, error) {
+	txHash, canonicalTxID, err := canonicalEvmHash(txID)
+	if err != nil {
+		return "", err
+	}
+
+	token, err := data.GetEnabledChainTokenBySymbol(order.Network, order.Token)
+	if err != nil {
+		return "", err
+	}
+	if token == nil || token.ID == 0 || strings.TrimSpace(token.ContractAddress) == "" {
+		return "", fmt.Errorf("enabled token contract not configured for %s/%s", order.Network, order.Token)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), manualVerifyRequestTimeout)
+	defer cancel()
+
+	clients, err := dialManualEvmClients(ctx, order.Network)
+	if err != nil {
+		return "", err
+	}
+	defer closeManualEvmClients(clients)
+
+	if err = validateManualEvmPaymentAcrossClients(ctx, clients, order, txHash, token); err != nil {
+		return "", err
+	}
+	return canonicalTxID, nil
+}
+
+type evmChainReader interface {
+	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
+	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
+}
+
+type manualEvmClient struct {
+	label  string
+	reader evmChainReader
+	close  func()
+}
+
+func closeManualEvmClients(clients []manualEvmClient) {
+	for _, item := range clients {
+		if item.close != nil {
+			item.close()
+		}
+	}
+}
+
+func validateManualEvmPaymentAcrossClients(ctx context.Context, clients []manualEvmClient, order *mdb.Orders, txHash common.Hash, token *mdb.ChainToken) error {
+	var verifyErrors []string
+	for _, item := range clients {
+		if err := validateManualEvmPaymentWithClient(ctx, item.reader, order, txHash, token); err != nil {
+			verifyErrors = append(verifyErrors, fmt.Sprintf("%s: %v", item.label, err))
+			continue
+		}
+		return nil
+	}
+	if len(verifyErrors) > 0 {
+		return fmt.Errorf("manual EVM verification failed: %s", strings.Join(verifyErrors, "; "))
+	}
+	return fmt.Errorf("no enabled %s WS/HTTP RPC node configured", order.Network)
+}
+
+func validateManualEvmPaymentWithClient(ctx context.Context, client evmChainReader, order *mdb.Orders, txHash common.Hash, token *mdb.ChainToken) error {
+	receipt, err := client.TransactionReceipt(ctx, txHash)
+	if err != nil {
+		return fmt.Errorf("fetch transaction receipt: %w", err)
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return fmt.Errorf("transaction is not successful")
+	}
+	if receipt.BlockNumber == nil {
+		return fmt.Errorf("transaction receipt missing block number")
+	}
+	txHeader, err := client.HeaderByNumber(ctx, receipt.BlockNumber)
+	if err != nil {
+		return fmt.Errorf("fetch transaction block header: %w", err)
+	}
+	if err = ensureEvmTransactionNotBeforeOrder(txHeader.Time, order); err != nil {
+		return err
+	}
+	if err = ensureEvmConfirmations(ctx, client, order.Network, receipt.BlockNumber); err != nil {
+		return err
+	}
+
+	contract, err := normalizeEvmAddress(token.ContractAddress)
+	if err != nil {
+		return fmt.Errorf("invalid token contract address: %w", err)
+	}
+	to, err := normalizeEvmAddress(order.ReceiveAddress)
+	if err != nil {
+		return fmt.Errorf("invalid order receive address: %w", err)
+	}
+	amountMismatch := false
+	for _, item := range receipt.Logs {
+		if item == nil || !strings.EqualFold(item.Address.Hex(), contract.Hex()) {
+			continue
+		}
+		if len(item.Topics) < 3 || item.Topics[0] != erc20TransferEventHash {
+			continue
+		}
+		if !strings.EqualFold(common.BytesToAddress(item.Topics[2].Bytes()).Hex(), to.Hex()) {
+			continue
+		}
+		rawAmount := new(big.Int).SetBytes(item.Data)
+		if amountMatchesRaw(order.ActualAmount, rawAmount, token.Decimals) {
+			return nil
+		}
+		amountMismatch = true
+	}
+
+	if amountMismatch {
+		return fmt.Errorf("transaction amount mismatch")
+	}
+	return fmt.Errorf("matching token transfer to order address not found")
+}
+
+func dialManualEvmClients(ctx context.Context, network string) ([]manualEvmClient, error) {
+	var clients []manualEvmClient
+	var connectErrors []string
+	for _, nodeType := range []string{mdb.RpcNodeTypeWs, mdb.RpcNodeTypeHttp} {
+		node, err := data.SelectRpcNode(network, nodeType)
+		if err != nil {
+			return nil, err
+		}
+		if node == nil || node.ID == 0 || strings.TrimSpace(node.Url) == "" {
+			continue
+		}
+		rpcURL := strings.TrimSpace(node.Url)
+		client, err := ethclient.DialContext(ctx, rpcURL)
+		if err == nil {
+			clients = append(clients, manualEvmClient{
+				label:  fmt.Sprintf("%s %s", nodeType, rpcURL),
+				reader: client,
+				close:  client.Close,
+			})
+			continue
+		}
+		connectErrors = append(connectErrors, fmt.Sprintf("%s %s: %v", nodeType, rpcURL, err))
+	}
+	if len(clients) > 0 {
+		return clients, nil
+	}
+	if len(connectErrors) > 0 {
+		return nil, fmt.Errorf("connect %s RPC failed: %s", network, strings.Join(connectErrors, "; "))
+	}
+	return nil, fmt.Errorf("no enabled %s WS/HTTP RPC node configured", network)
+}
+
+func ensureEvmTransactionNotBeforeOrder(blockTime uint64, order *mdb.Orders) error {
+	if order == nil {
+		return fmt.Errorf("order not found")
+	}
+	if int64(blockTime)*1000 < order.CreatedAt.TimestampMilli() {
+		return fmt.Errorf("transaction predates the order")
+	}
+	return nil
+}
+
+func ensureEvmConfirmations(ctx context.Context, client evmChainReader, network string, txBlock *big.Int) error {
+	chain, err := data.GetChainByNetwork(network)
+	if err != nil {
+		return err
+	}
+	minConfirmations := 1
+	if chain != nil && chain.MinConfirmations > 0 {
+		minConfirmations = chain.MinConfirmations
+	}
+	header, err := client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("fetch latest block: %w", err)
+	}
+	confirmations := new(big.Int).Sub(header.Number, txBlock)
+	confirmations.Add(confirmations, big.NewInt(1))
+	if confirmations.Sign() < 0 || confirmations.Cmp(big.NewInt(int64(minConfirmations))) < 0 {
+		return fmt.Errorf("transaction confirmations %s below required %d", confirmations.String(), minConfirmations)
+	}
+	return nil
+}
+
+type tronContractParam struct {
+	TypeURL string          `json:"type_url"`
+	Value   json.RawMessage `json:"value"`
+}
+
+type manualTronTransaction struct {
+	TxID    string `json:"txID"`
+	RawData struct {
+		Contract []struct {
+			Type      string            `json:"type"`
+			Parameter tronContractParam `json:"parameter"`
+		} `json:"contract"`
+		Timestamp int64 `json:"timestamp"`
+	} `json:"raw_data"`
+	Ret []struct {
+		ContractRet string `json:"contractRet"`
+	} `json:"ret"`
+}
+
+type manualTronTxInfo struct {
+	ID             string               `json:"id"`
+	BlockNumber    int64                `json:"blockNumber"`
+	BlockTimeStamp int64                `json:"blockTimeStamp"`
+	ContractResult []string             `json:"contractResult"`
+	Log            []manualTronEventLog `json:"log"`
+	Receipt        struct {
+		Result string `json:"result"`
+	} `json:"receipt"`
+}
+
+type manualTronEventLog struct {
+	Address string   `json:"address"`
+	Topics  []string `json:"topics"`
+	Data    string   `json:"data"`
+}
+
+type manualTronBlock struct {
+	BlockHeader struct {
+		RawData struct {
+			Number int64 `json:"number"`
+		} `json:"raw_data"`
+	} `json:"block_header"`
+}
+
+type manualTronTransferContractValue struct {
+	OwnerAddress string `json:"owner_address"`
+	ToAddress    string `json:"to_address"`
+	Amount       int64  `json:"amount"`
+}
+
+func validateManualTronPayment(order *mdb.Orders, txID string) (string, error) {
+	normalizedTxID, err := normalizeTronTxID(txID)
+	if err != nil {
+		return "", err
+	}
+
+	baseURL, apiKey, err := ResolveTronNode()
+	if err != nil {
+		return "", err
+	}
+
+	var tx manualTronTransaction
+	if err = tronPostJSON(baseURL, apiKey, "/wallet/gettransactionbyid", map[string]interface{}{"value": normalizedTxID}, &tx); err != nil {
+		return "", fmt.Errorf("fetch tron transaction: %w", err)
+	}
+	if strings.TrimSpace(tx.TxID) == "" {
+		return "", fmt.Errorf("transaction not found")
+	}
+	if strings.TrimSpace(tx.TxID) != "" && !strings.EqualFold(strings.TrimSpace(tx.TxID), normalizedTxID) {
+		return "", fmt.Errorf("transaction id mismatch")
+	}
+	if len(tx.Ret) > 0 && tx.Ret[0].ContractRet != "" && tx.Ret[0].ContractRet != "SUCCESS" {
+		return "", fmt.Errorf("transaction is not successful: %s", tx.Ret[0].ContractRet)
+	}
+
+	var info manualTronTxInfo
+	if err = tronPostJSON(baseURL, apiKey, "/wallet/gettransactioninfobyid", map[string]interface{}{"value": normalizedTxID}, &info); err != nil {
+		return "", fmt.Errorf("fetch tron transaction info: %w", err)
+	}
+	if info.BlockNumber <= 0 {
+		return "", fmt.Errorf("transaction is not confirmed")
+	}
+	if info.Receipt.Result != "" && info.Receipt.Result != "SUCCESS" {
+		return "", fmt.Errorf("transaction is not successful: %s", info.Receipt.Result)
+	}
+	if err = ensureTronConfirmations(baseURL, apiKey, order.Network, info.BlockNumber); err != nil {
+		return "", err
+	}
+	if info.BlockTimeStamp <= 0 {
+		return "", fmt.Errorf("transaction block timestamp missing")
+	}
+	if info.BlockTimeStamp < order.CreatedAt.TimestampMilli() {
+		return "", fmt.Errorf("transaction predates the order")
+	}
+
+	if strings.EqualFold(strings.TrimSpace(order.Token), "TRX") {
+		if err = validateManualTronNativeTransfer(order, &tx); err != nil {
+			return "", err
+		}
+		return normalizedTxID, nil
+	}
+	if err = validateManualTronTRC20Transfer(order, &tx, &info); err != nil {
+		return "", err
+	}
+	return normalizedTxID, nil
+}
+
+func validateManualTronNativeTransfer(order *mdb.Orders, tx *manualTronTransaction) error {
+	if len(tx.RawData.Contract) == 0 || tx.RawData.Contract[0].Type != "TransferContract" {
+		return fmt.Errorf("transaction is not a TRX transfer")
+	}
+	var val manualTronTransferContractValue
+	if err := json.Unmarshal(tx.RawData.Contract[0].Parameter.Value, &val); err != nil {
+		return err
+	}
+	toAddr, err := tronHexToAddress(val.ToAddress)
+	if err != nil {
+		return fmt.Errorf("invalid TRX recipient address: %w", err)
+	}
+	if !strings.EqualFold(toAddr, order.ReceiveAddress) {
+		return fmt.Errorf("transaction recipient mismatch")
+	}
+	if !amountMatchesRaw(order.ActualAmount, big.NewInt(val.Amount), 6) {
+		return fmt.Errorf("transaction amount mismatch")
+	}
+	return nil
+}
+
+func validateManualTronTRC20Transfer(order *mdb.Orders, tx *manualTronTransaction, info *manualTronTxInfo) error {
+	token, err := data.GetEnabledChainTokenBySymbol(mdb.NetworkTron, order.Token)
+	if err != nil {
+		return err
+	}
+	if token == nil || token.ID == 0 || strings.TrimSpace(token.ContractAddress) == "" {
+		return fmt.Errorf("enabled token contract not configured for tron/%s", order.Token)
+	}
+	if len(tx.RawData.Contract) == 0 || tx.RawData.Contract[0].Type != "TriggerSmartContract" {
+		return fmt.Errorf("transaction is not a TRC20 transfer")
+	}
+	contractHex, err := tronAddressToHex(token.ContractAddress)
+	if err != nil {
+		return fmt.Errorf("invalid configured TRC20 contract: %w", err)
+	}
+	return validateManualTronTRC20TransferEvent(order, info, contractHex, token.Decimals)
+}
+
+func validateManualTronTRC20TransferEvent(order *mdb.Orders, info *manualTronTxInfo, contractHex string, decimals int) error {
+	if info == nil || len(info.Log) == 0 {
+		return fmt.Errorf("matching TRC20 transfer event to order address not found")
+	}
+	toHex, err := tronAddressToHex(order.ReceiveAddress)
+	if err != nil {
+		return fmt.Errorf("invalid order receive address: %w", err)
+	}
+	transferTopic := strings.TrimPrefix(erc20TransferEventHash.Hex(), "0x")
+	amountMismatch := false
+	for _, event := range info.Log {
+		eventContractHex, err := normalizeTronAddressHex(event.Address)
+		if err != nil || eventContractHex != contractHex {
+			continue
+		}
+		if len(event.Topics) < 3 || normalizeEventTopic(event.Topics[0]) != transferTopic {
+			continue
+		}
+		eventToHex, err := tronTopicAddressToHex(event.Topics[2])
+		if err != nil || eventToHex != toHex {
+			continue
+		}
+		rawAmount, err := tronEventDataAmount(event.Data)
+		if err != nil {
+			return fmt.Errorf("invalid TRC20 transfer event amount: %w", err)
+		}
+		if amountMatchesRaw(order.ActualAmount, rawAmount, decimals) {
+			return nil
+		}
+		amountMismatch = true
+	}
+	if amountMismatch {
+		return fmt.Errorf("transaction amount mismatch")
+	}
+	return fmt.Errorf("matching TRC20 transfer event to order address not found")
+}
+
+func ensureTronConfirmations(baseURL, apiKey, network string, txBlock int64) error {
+	var latest manualTronBlock
+	if err := tronPostJSON(baseURL, apiKey, "/wallet/getnowblock", map[string]interface{}{}, &latest); err != nil {
+		return fmt.Errorf("fetch latest tron block: %w", err)
+	}
+	chain, err := data.GetChainByNetwork(network)
+	if err != nil {
+		return err
+	}
+	minConfirmations := 1
+	if chain != nil && chain.MinConfirmations > 0 {
+		minConfirmations = chain.MinConfirmations
+	}
+	confirmations := latest.BlockHeader.RawData.Number - txBlock + 1
+	if confirmations < int64(minConfirmations) {
+		return fmt.Errorf("transaction confirmations %d below required %d", confirmations, minConfirmations)
+	}
+	return nil
+}
+
+func tronPostJSON(baseURL, apiKey, path string, body interface{}, out interface{}) error {
+	payload, _ := json.Marshal(body)
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if apiKey = strings.TrimSpace(apiKey); apiKey != "" {
+		req.Header.Set("TRON-PRO-API-KEY", apiKey)
+	}
+	client := &http.Client{Timeout: manualVerifyRequestTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
+	}
+	return json.Unmarshal(raw, out)
+}
+
+func validateManualSolanaPayment(order *mdb.Orders, sig string) (string, error) {
+	sig = strings.TrimSpace(sig)
+	txData, err := SolGetTransaction(sig)
+	if err != nil {
+		return "", fmt.Errorf("fetch solana transaction: %w", err)
+	}
+	if !gjson.GetBytes(txData, "result").Exists() || gjson.GetBytes(txData, "result").Type == gjson.Null {
+		return "", fmt.Errorf("transaction not found")
+	}
+	if err = ensureSolanaConfirmations(order.Network, sig); err != nil {
+		return "", err
+	}
+
+	tokens, err := data.ListEnabledChainTokensByNetwork(mdb.NetworkSolana)
+	if err != nil {
+		return "", err
+	}
+	mintTokens := make(map[string]*mdb.ChainToken, len(tokens))
+	var nativeSolToken *mdb.ChainToken
+	for i := range tokens {
+		sym := strings.ToUpper(strings.TrimSpace(tokens[i].Symbol))
+		mint := strings.TrimSpace(tokens[i].ContractAddress)
+		if sym == "SOL" && mint == "" {
+			nativeSolToken = &tokens[i]
+			continue
+		}
+		if mint != "" {
+			mintTokens[mint] = &tokens[i]
+		}
+	}
+
+	instructions := gjson.GetBytes(txData, "result.transaction.message.instructions").Array()
+	amountMismatch := false
+	for _, instruction := range instructions {
+		transferInfo, parseErr := ParseTransferInfoFromInstruction(instruction, txData)
+		if parseErr != nil || transferInfo == nil {
+			continue
+		}
+		if !isTransferToAddress(transferInfo, order.ReceiveAddress) {
+			continue
+		}
+		token, amount := resolveSolTokenAndAmount(transferInfo, mintTokens, nativeSolToken)
+		if !strings.EqualFold(token, order.Token) {
+			continue
+		}
+		if err = ensureSolanaTransferNotBeforeOrder(transferInfo.BlockTime, order); err != nil {
+			return "", err
+		}
+		if amountMatchesFloat(order.ActualAmount, amount) {
+			return sig, nil
+		}
+		amountMismatch = true
+	}
+	if amountMismatch {
+		return "", fmt.Errorf("transaction amount mismatch")
+	}
+	return "", fmt.Errorf("matching solana transfer to order address not found")
+}
+
+func ensureSolanaTransferNotBeforeOrder(blockTime int64, order *mdb.Orders) error {
+	if order == nil {
+		return fmt.Errorf("order not found")
+	}
+	if blockTime <= 0 {
+		return fmt.Errorf("transaction block time missing")
+	}
+	if blockTime*1000 < order.CreatedAt.TimestampMilli() {
+		return fmt.Errorf("transaction predates the order")
+	}
+	return nil
+}
+
+func ensureSolanaConfirmations(network, sig string) error {
+	chain, err := data.GetChainByNetwork(network)
+	if err != nil {
+		return err
+	}
+	minConfirmations := 1
+	if chain != nil && chain.MinConfirmations > 0 {
+		minConfirmations = chain.MinConfirmations
+	}
+	if minConfirmations <= 1 {
+		return nil
+	}
+
+	body, err := SolRetryClient("getSignatureStatuses", []interface{}{
+		[]string{sig},
+		map[string]interface{}{"searchTransactionHistory": true},
+	})
+	if err != nil {
+		return fmt.Errorf("fetch solana signature status: %w", err)
+	}
+	status := gjson.GetBytes(body, "result.value.0")
+	if !status.Exists() || status.Type == gjson.Null {
+		return fmt.Errorf("transaction status not found")
+	}
+	if errValue := status.Get("err"); errValue.Exists() && errValue.Type != gjson.Null {
+		return fmt.Errorf("transaction is not successful: %s", errValue.Raw)
+	}
+	if status.Get("confirmationStatus").String() == "finalized" {
+		return nil
+	}
+	confirmations := status.Get("confirmations").Int()
+	if confirmations < int64(minConfirmations) {
+		return fmt.Errorf("transaction confirmations %d below required %d", confirmations, minConfirmations)
+	}
+	return nil
+}
+
+func amountMatchesRaw(expected float64, rawAmount *big.Int, decimals int) bool {
+	if rawAmount == nil || rawAmount.Sign() <= 0 {
+		return false
+	}
+	if decimals < 0 {
+		decimals = 0
+	}
+	actual := decimal.NewFromBigInt(rawAmount, -int32(decimals))
+	return roundedAmount(expected).Equal(actual.Round(int32(data.GetAmountPrecision())))
+}
+
+func amountMatchesFloat(expected, actual float64) bool {
+	return roundedAmount(expected).Equal(roundedAmount(actual))
+}
+
+func roundedAmount(amount float64) decimal.Decimal {
+	precision := data.GetAmountPrecision()
+	return decimal.NewFromFloat(math.MustParsePrecFloat64(amount, precision)).Round(int32(precision))
+}
+
+func tronHexToAddress(hexAddr string) (string, error) {
+	hexAddr, err := normalizeTronAddressHex(hexAddr)
+	if err != nil {
+		return "", err
+	}
+	raw, err := hex.DecodeString(hexAddr)
+	if err != nil {
+		return "", err
+	}
+	return tron.EncodeCheck(raw), nil
+}
+
+func tronAddressToHex(addr string) (string, error) {
+	raw, err := tron.DecodeCheck(strings.TrimSpace(addr))
+	if err != nil {
+		return "", err
+	}
+	if len(raw) != 21 || raw[0] != tron.PrefixMainnet {
+		return "", fmt.Errorf("invalid tron address")
+	}
+	return strings.ToLower(hex.EncodeToString(raw)), nil
+}
+
+func normalizeTronAddressHex(hexAddr string) (string, error) {
+	hexAddr = normalizeTronHexAddress(hexAddr)
+	raw, err := hex.DecodeString(hexAddr)
+	if err != nil {
+		return "", err
+	}
+	switch len(raw) {
+	case 20:
+		raw = append([]byte{tron.PrefixMainnet}, raw...)
+	case 21:
+		if raw[0] != tron.PrefixMainnet {
+			return "", fmt.Errorf("invalid tron address prefix")
+		}
+	default:
+		return "", fmt.Errorf("invalid address length: %d", len(raw))
+	}
+	return strings.ToLower(hex.EncodeToString(raw)), nil
+}
+
+func normalizeTronHexAddress(hexAddr string) string {
+	hexAddr = strings.TrimSpace(hexAddr)
+	hexAddr = strings.TrimPrefix(hexAddr, "0x")
+	hexAddr = strings.TrimPrefix(hexAddr, "0X")
+	return strings.ToLower(hexAddr)
+}
+
+func normalizeEventTopic(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "0x")
+	value = strings.TrimPrefix(value, "0X")
+	return strings.ToLower(value)
+}
+
+func tronTopicAddressToHex(topic string) (string, error) {
+	topic = normalizeEventTopic(topic)
+	if len(topic) != 64 {
+		return "", fmt.Errorf("invalid TRON event address topic length")
+	}
+	if _, err := hex.DecodeString(topic); err != nil {
+		return "", err
+	}
+	return normalizeTronAddressHex(topic[24:])
+}
+
+func tronEventDataAmount(data string) (*big.Int, error) {
+	data = normalizeEventTopic(data)
+	if data == "" {
+		return nil, fmt.Errorf("empty event data")
+	}
+	if len(data)%2 != 0 {
+		return nil, fmt.Errorf("odd-length event data")
+	}
+	raw, err := hex.DecodeString(data)
+	if err != nil {
+		return nil, err
+	}
+	return new(big.Int).SetBytes(raw), nil
+}
+
+func isEvmHash(value string) bool {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "0x")
+	value = strings.TrimPrefix(value, "0X")
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func canonicalEvmHash(value string) (common.Hash, string, error) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "0x")
+	value = strings.TrimPrefix(value, "0X")
+	if len(value) != 64 {
+		return common.Hash{}, "", fmt.Errorf("invalid EVM transaction hash")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return common.Hash{}, "", err
+	}
+	hash := common.HexToHash("0x" + strings.ToLower(value))
+	return hash, hash.Hex(), nil
+}
+
+func normalizeTronTxID(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "0x")
+	value = strings.TrimPrefix(value, "0X")
+	if len(value) != 64 {
+		return "", fmt.Errorf("invalid TRON transaction id length")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return "", err
+	}
+	return strings.ToLower(value), nil
+}
+
+func normalizeEvmAddress(value string) (common.Address, error) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "0x")
+	value = strings.TrimPrefix(value, "0X")
+	if len(value) != 40 {
+		return common.Address{}, fmt.Errorf("invalid address length")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return common.Address{}, err
+	}
+	return common.HexToAddress("0x" + value), nil
+}

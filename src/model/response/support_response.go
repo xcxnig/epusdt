@@ -1,8 +1,9 @@
 package response
 
 type NetworkTokenSupport struct {
-	Network string   `json:"network" example:"tron"`
-	Tokens  []string `json:"tokens" example:"USDT,USDC"`
+	Network     string   `json:"network" example:"tron"`
+	DisplayName string   `json:"display_name" example:"TRON"`
+	Tokens      []string `json:"tokens" example:"USDT,USDC"`
 }
 
 type EpayPublicConfig struct {

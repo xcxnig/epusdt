@@ -20,6 +20,7 @@ import (
 	"github.com/GMWalletApp/epusdt/util/http_client"
 	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/GMWalletApp/epusdt/util/sign"
+	"github.com/dromara/carbon/v2"
 	"github.com/go-resty/resty/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
@@ -578,6 +579,12 @@ func TestGetPublicConfig(t *testing.T) {
 		row := item.(map[string]interface{})
 		network := row["network"].(string)
 		seen[network] = true
+		if _, ok := row["display_name"].(string); !ok {
+			t.Fatalf("supported_assets[%s].display_name missing or not string: %#v", network, row["display_name"])
+		}
+		if network == "tron" && row["display_name"] != "TRON" {
+			t.Fatalf("supported_assets.tron.display_name = %v, want TRON", row["display_name"])
+		}
 	}
 	for _, n := range []string{"tron", "solana"} {
 		if !seen[n] {
@@ -989,51 +996,64 @@ func TestCheckStatus_NotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	t.Logf("CheckStatus(not found): status=%d body=%s", rec.Code, rec.Body.String())
-	if rec.Code >= 500 {
-		t.Fatalf("unexpected server error: %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if rec.Code == http.StatusNotFound && rec.Body.Len() == 0 {
-		t.Fatalf("route returned 404 with empty body — route may not be registered")
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal check-status error response: %v", err)
+	}
+	if got := int(resp["status_code"].(float64)); got != 10008 {
+		t.Fatalf("status_code = %d, want 10008; response=%v", got, resp)
 	}
 }
 
-// TestCheckStatus_WithOrder verifies /pay/check-status/:trade_id returns 200
-// and a status field when the order exists.
+// TestCheckStatus_WithOrder verifies /pay/check-status/:trade_id returns the
+// real order status for existing orders in all checkout-relevant states.
 func TestCheckStatus_WithOrder(t *testing.T) {
 	e := setupTestEnv(t)
 
-	// Create an order first via the GMPAY route.
-	body := signBody(map[string]interface{}{
-		"order_id":   "check-status-001",
-		"amount":     1.00,
-		"token":      "usdt",
-		"currency":   "cny",
-		"network":    "tron",
-		"notify_url": "http://localhost/notify",
-	})
-	createRec := doPost(e, "/payments/gmpay/v1/order/create-transaction", body)
-	if createRec.Code != http.StatusOK {
-		t.Fatalf("create order failed: %d %s", createRec.Code, createRec.Body.String())
-	}
-	var createResp map[string]interface{}
-	json.Unmarshal(createRec.Body.Bytes(), &createResp)
-	tradeId, _ := createResp["data"].(map[string]interface{})["trade_id"].(string)
-	if tradeId == "" {
-		t.Fatal("no trade_id in create response")
+	cases := []struct {
+		name   string
+		status int
+	}{
+		{name: "wait-pay", status: mdb.StatusWaitPay},
+		{name: "paid", status: mdb.StatusPaySuccess},
+		{name: "expired", status: mdb.StatusExpired},
 	}
 
-	// Now check status.
-	req := httptest.NewRequest(http.MethodGet, "/pay/check-status/"+tradeId, nil)
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, req)
-	t.Logf("CheckStatus: status=%d body=%s", rec.Code, rec.Body.String())
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	var resp map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &resp)
-	if resp["data"] == nil {
-		t.Fatal("expected data in check-status response")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tradeID := createCheckoutCounterRespTestOrder(t, e, "check-status-"+tc.name)
+			if err := dao.Mdb.Model(&mdb.Orders{}).
+				Where("trade_id = ?", tradeID).
+				Update("status", tc.status).Error; err != nil {
+				t.Fatalf("update status: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/pay/check-status/"+tradeID, nil)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			t.Logf("CheckStatus(%s): status=%d body=%s", tc.name, rec.Code, rec.Body.String())
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+
+			var resp map[string]interface{}
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal check-status response: %v", err)
+			}
+			data, ok := resp["data"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected data in check-status response, got: %v", resp)
+			}
+			if got, _ := data["trade_id"].(string); got != tradeID {
+				t.Fatalf("trade_id = %q, want %q", got, tradeID)
+			}
+			if got := int(data["status"].(float64)); got != tc.status {
+				t.Fatalf("status = %d, want %d", got, tc.status)
+			}
+		})
 	}
 }
 
@@ -1059,6 +1079,123 @@ func TestCheckoutCounter_NotFound(t *testing.T) {
 	if rec.Code >= 500 && rec.Body.Len() == 0 {
 		t.Fatalf("unexpected server error with empty body: %d", rec.Code)
 	}
+}
+
+func TestCheckoutCounterResp_ReturnsPaidOrder(t *testing.T) {
+	e := setupTestEnv(t)
+	tradeID := createCheckoutCounterRespTestOrder(t, e, "checkout-counter-paid-001")
+
+	if err := dao.Mdb.Model(&mdb.Orders{}).
+		Where("trade_id = ?", tradeID).
+		Update("status", mdb.StatusPaySuccess).Error; err != nil {
+		t.Fatalf("mark order paid: %v", err)
+	}
+
+	data := getCheckoutCounterRespData(t, e, tradeID)
+	if got, _ := data["trade_id"].(string); got != tradeID {
+		t.Fatalf("trade_id = %q, want %q; data=%v", got, tradeID, data)
+	}
+	if got, _ := data["redirect_url"].(string); got != "https://merchant.example/return" {
+		t.Fatalf("redirect_url = %q", got)
+	}
+}
+
+func TestCheckoutCounterResp_ReturnsExpiredOrder(t *testing.T) {
+	e := setupTestEnv(t)
+	tradeID := createCheckoutCounterRespTestOrder(t, e, "checkout-counter-expired-001")
+	expiredCreatedAt := carbon.Now().SubMinutes(config.GetOrderExpirationTime() + 1)
+
+	if err := dao.Mdb.Model(&mdb.Orders{}).
+		Where("trade_id = ?", tradeID).
+		Updates(map[string]interface{}{
+			"status":     mdb.StatusExpired,
+			"created_at": expiredCreatedAt,
+		}).Error; err != nil {
+		t.Fatalf("mark order expired: %v", err)
+	}
+
+	data := getCheckoutCounterRespData(t, e, tradeID)
+	if got, _ := data["trade_id"].(string); got != tradeID {
+		t.Fatalf("trade_id = %q, want %q; data=%v", got, tradeID, data)
+	}
+	expirationTime, _ := data["expiration_time"].(float64)
+	if int64(expirationTime) > carbon.Now().TimestampMilli() {
+		t.Fatalf("expiration_time = %.0f, want expired timestamp", expirationTime)
+	}
+}
+
+func TestCheckoutCounterResp_UnknownOrderReturnsClearError(t *testing.T) {
+	e := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/pay/checkout-counter-resp/nonexistent-trade-id", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal checkout counter error response: %v", err)
+	}
+	if got := int(resp["status_code"].(float64)); got != 10008 {
+		t.Fatalf("status_code = %d, want 10008; response=%v", got, resp)
+	}
+	if resp["message"] == "" {
+		t.Fatalf("expected error message, got: %v", resp)
+	}
+}
+
+func createCheckoutCounterRespTestOrder(t *testing.T, e *echo.Echo, orderID string) string {
+	t.Helper()
+
+	body := signBody(map[string]interface{}{
+		"order_id":     orderID,
+		"amount":       1.00,
+		"token":        "usdt",
+		"currency":     "cny",
+		"network":      "tron",
+		"notify_url":   "http://localhost/notify",
+		"redirect_url": "https://merchant.example/return",
+	})
+	rec := doPost(e, "/payments/gmpay/v1/order/create-transaction", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create order failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected create response data, got: %v", resp)
+	}
+	tradeID, _ := data["trade_id"].(string)
+	if tradeID == "" {
+		t.Fatalf("missing trade_id in create response: %v", resp)
+	}
+	return tradeID
+}
+
+func getCheckoutCounterRespData(t *testing.T, e *echo.Echo, tradeID string) map[string]interface{} {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/pay/checkout-counter-resp/"+tradeID, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal checkout counter response: %v", err)
+	}
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected checkout counter data, got: %v", resp)
+	}
+	return data
 }
 
 // TestSwitchNetwork_MissingFields verifies that /pay/switch-network validates

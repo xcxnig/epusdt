@@ -53,9 +53,14 @@ func buildSupportedAssets() ([]response.NetworkTokenSupport, error) {
 			continue
 		}
 		sort.Strings(symbols)
+		displayName := strings.TrimSpace(ch.DisplayName)
+		if displayName == "" {
+			displayName = network
+		}
 		supports = append(supports, response.NetworkTokenSupport{
-			Network: network,
-			Tokens:  symbols,
+			Network:     network,
+			DisplayName: displayName,
+			Tokens:      symbols,
 		})
 	}
 
