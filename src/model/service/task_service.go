@@ -257,6 +257,10 @@ func TryProcessEvmERC20Transfer(chainNetwork string, contract common.Address, to
 		log.Sugar.Warnf("[%s-%s][%s] skip trade_id=%s token mismatch order=%s", net, tokenSym, walletAddr, tradeID, order.Token)
 		return
 	}
+	if blockTsMs > 0 && blockTsMs < order.CreatedAt.TimestampMilli() {
+		log.Sugar.Warnf("[%s-%s][%s] skip tx %s because block time %d is before order create time %d", net, tokenSym, walletAddr, txHash, blockTsMs, order.CreatedAt.TimestampMilli())
+		return
+	}
 
 	req := &request.OrderProcessingRequest{
 		ReceiveAddress:     walletAddr,

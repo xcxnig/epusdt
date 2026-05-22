@@ -144,3 +144,68 @@ func TestTryProcessEvmERC20TransferUsesChainTokenContract(t *testing.T) {
 		t.Fatalf("runtime lock still exists for trade_id=%q", lockTradeID)
 	}
 }
+
+func TestTryProcessEvmERC20TransferSkipsTransfersBeforeOrderCreation(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	const (
+		tradeID  = "T202605110002"
+		orderID  = "ORD202605110002"
+		tokenSym = "USDT"
+		amount   = 25.5
+	)
+	contract := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	receiveAddress := common.HexToAddress("0x4444444444444444444444444444444444444444")
+
+	if err := dao.Mdb.Create(&mdb.ChainToken{
+		Network:         mdb.NetworkEthereum,
+		Symbol:          tokenSym,
+		ContractAddress: contract.Hex(),
+		Decimals:        6,
+		Enabled:         true,
+	}).Error; err != nil {
+		t.Fatalf("seed chain token: %v", err)
+	}
+
+	order := &mdb.Orders{
+		TradeId:        tradeID,
+		OrderId:        orderID,
+		Amount:         100,
+		Currency:       "CNY",
+		ActualAmount:   amount,
+		Token:          tokenSym,
+		Network:        mdb.NetworkEthereum,
+		ReceiveAddress: strings.ToLower(receiveAddress.Hex()),
+		Status:         mdb.StatusWaitPay,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("seed order: %v", err)
+	}
+	if err := data.LockTransaction(mdb.NetworkEthereum, order.ReceiveAddress, order.Token, order.TradeId, order.ActualAmount, time.Hour); err != nil {
+		t.Fatalf("lock transaction: %v", err)
+	}
+
+	rawValue := big.NewInt(25_500_000) // 25.5 with 6 decimals
+	oldBlockTsMs := order.CreatedAt.TimestampMilli() - 1
+	TryProcessEvmERC20Transfer(mdb.NetworkEthereum, contract, receiveAddress, rawValue, "0xold-hash", oldBlockTsMs)
+
+	got, err := data.GetOrderInfoByTradeId(tradeID)
+	if err != nil {
+		t.Fatalf("load order: %v", err)
+	}
+	if got.Status != mdb.StatusWaitPay {
+		t.Fatalf("order status = %d, want %d", got.Status, mdb.StatusWaitPay)
+	}
+	if got.BlockTransactionId != "" {
+		t.Fatalf("block transaction id = %q, want empty", got.BlockTransactionId)
+	}
+
+	lockTradeID, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkEthereum, receiveAddress.Hex(), tokenSym, amount)
+	if err != nil {
+		t.Fatalf("lookup retained lock: %v", err)
+	}
+	if lockTradeID != tradeID {
+		t.Fatalf("runtime lock trade_id = %q, want %q", lockTradeID, tradeID)
+	}
+}

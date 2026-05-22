@@ -26,6 +26,8 @@ import (
 // gProcessedSignatures 已处理签名缓存，避免重复调用 getTransaction
 var gProcessedSignatures sync.Map // sig -> unix timestamp
 
+var processSolanaOrder = OrderProcessing
+
 type TransferInfo struct {
 	Source      string  // Source address (for SOL) or source ATA (for SPL tokens)
 	Destination string  // Destination address (for SOL) or destination ATA (for SPL tokens)
@@ -150,6 +152,7 @@ func SolCallBack(address string, wg *sync.WaitGroup) {
 	// Process each transaction signature
 	for sigIdx, txSig := range result {
 		sig := txSig.Signature
+		retrySignature := false
 
 		// Skip failed transactions
 		if txSig.Err != nil {
@@ -213,6 +216,7 @@ func SolCallBack(address string, wg *sync.WaitGroup) {
 			tradeID, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkSolana, address, token, amount)
 			if err != nil {
 				log.Sugar.Errorf("[SOL][%s] sig=%s query transaction_lock failed: %v", address, sig, err)
+				retrySignature = true
 				continue
 			}
 			if tradeID == "" {
@@ -226,6 +230,7 @@ func SolCallBack(address string, wg *sync.WaitGroup) {
 			order, err := data.GetOrderInfoByTradeId(tradeID)
 			if err != nil {
 				log.Sugar.Errorf("[SOL][%s] sig=%s load order failed for trade_id=%s: %v", address, sig, tradeID, err)
+				retrySignature = true
 				continue
 			}
 			log.Sugar.Infof("[SOL][%s] order loaded: trade_id=%s order_id=%s status=%d created_at_ms=%d",
@@ -252,13 +257,14 @@ func SolCallBack(address string, wg *sync.WaitGroup) {
 			}
 			log.Sugar.Infof("[SOL][%s] calling OrderProcessing: trade_id=%s sig=%s token=%s amount=%.2f",
 				address, tradeID, sig, token, amount)
-			err = OrderProcessing(req)
+			err = processSolanaOrder(req)
 			if err != nil {
 				if errors.Is(err, constant.OrderBlockAlreadyProcess) || errors.Is(err, constant.OrderStatusConflict) {
 					log.Sugar.Infof("[SOL][%s] sig=%s already resolved: trade_id=%s reason=%v", address, sig, tradeID, err)
 					continue
 				}
 				log.Sugar.Errorf("[SOL][%s] sig=%s OrderProcessing failed for trade_id=%s: %v", address, sig, tradeID, err)
+				retrySignature = true
 				continue
 			}
 
@@ -266,6 +272,11 @@ func SolCallBack(address string, wg *sync.WaitGroup) {
 				address, tradeID, sig, token, amount)
 			sendPaymentNotification(order)
 			log.Sugar.Infof("[SOL][%s] payment fully processed: trade_id=%s sig=%s", address, tradeID, sig)
+		}
+
+		if retrySignature {
+			log.Sugar.Debugf("[SOL][%s] sig=%s not marked processed because retryable processing failed", address, sig)
+			continue
 		}
 
 		// 标记已处理

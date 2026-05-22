@@ -27,16 +27,9 @@ const (
 func CheckAdminJWT() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ctx echo.Context) error {
-			raw := strings.TrimSpace(ctx.Request().Header.Get("Authorization"))
-			if raw == "" {
-				return echo.NewHTTPError(http.StatusUnauthorized, "missing authorization header")
-			}
-			if !strings.HasPrefix(raw, "Bearer ") {
-				return echo.NewHTTPError(http.StatusUnauthorized, "authorization header must use Bearer scheme")
-			}
-			token := strings.TrimSpace(raw[len("Bearer "):])
-			if token == "" {
-				return echo.NewHTTPError(http.StatusUnauthorized, "empty token")
+			token, err := adminTokenFromAuthorization(ctx.Request().Header.Get("Authorization"))
+			if err != nil {
+				return err
 			}
 			claims, err := appjwt.Parse(token)
 			if err != nil {
@@ -47,4 +40,24 @@ func CheckAdminJWT() echo.MiddlewareFunc {
 			return next(ctx)
 		}
 	}
+}
+
+func adminTokenFromAuthorization(header string) (string, error) {
+	raw := strings.TrimSpace(header)
+	if raw == "" {
+		return "", echo.NewHTTPError(http.StatusUnauthorized, "missing authorization header")
+	}
+
+	const bearerPrefix = "Bearer "
+	token := raw
+	if strings.HasPrefix(raw, bearerPrefix) {
+		token = strings.TrimSpace(raw[len(bearerPrefix):])
+	} else if raw == strings.TrimSpace(bearerPrefix) {
+		token = ""
+	}
+
+	if token == "" {
+		return "", echo.NewHTTPError(http.StatusUnauthorized, "empty token")
+	}
+	return token, nil
 }
