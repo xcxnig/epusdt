@@ -57,7 +57,7 @@
 
 | 领域 | 已支持系统 |
 |------|-----------|
-| **AI 分发** | [OneAPI](https://github.com/songquanpeng/one-api)、[NewAPI](https://github.com/QuantumNous/new-api) |
+| **AI 分发** | [Sub2API](https://github.com/Wei-Shaw/sub2api)、[NewAPI](https://github.com/QuantumNous/new-api) |
 | **发卡系统** | [独角数卡（Dujiaoka）](https://dujiao-next.com/)、[异次元发卡](https://github.com/lizhipay/acg-faka) |
 | **代理面板** | [V2Board](https://github.com/v2board/v2board)、[XBoard](https://github.com/cedar2025/Xboard)、[xiaoV2board](https://github.com/wyx2685/v2board/)、[SSPanel](https://github.com/anankke/sspanel-uim) |
 | **建站生态** | [WordPress](https://wordpress.com/)、[WHMCS](https://www.whmcs.com/) |
