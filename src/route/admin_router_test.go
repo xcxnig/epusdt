@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GMWalletApp/epusdt/config"
 	"github.com/GMWalletApp/epusdt/model/dao"
@@ -871,6 +872,164 @@ func TestAdminDashboard_AllRoutes(t *testing.T) {
 		rec := doGetAdmin(e, path, token)
 		t.Logf("GET %s → %d: %s", path, rec.Code, rec.Body.String())
 		assertOK(t, rec)
+	}
+}
+
+func TestAdminDashboard_RangeStatsIncludeHistoricalOrders(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	yesterday := time.Now().AddDate(0, 0, -1)
+	createdAt := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 10, 0, 0, 0, time.Local)
+	updatedAt := createdAt.Add(5 * time.Minute)
+
+	order := &mdb.Orders{
+		TradeId:        "trade-dashboard-yesterday",
+		OrderId:        "order-dashboard-yesterday",
+		Amount:         100,
+		Currency:       "CNY",
+		ActualAmount:   12.5,
+		ReceiveAddress: "TTestDashboardAddress001",
+		Token:          "USDT",
+		Network:        mdb.NetworkTron,
+		Status:         mdb.StatusPaySuccess,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create historical order: %v", err)
+	}
+	if err := dao.Mdb.Model(order).Updates(map[string]interface{}{
+		"created_at": createdAt,
+		"updated_at": updatedAt,
+	}).Error; err != nil {
+		t.Fatalf("age historical order: %v", err)
+	}
+
+	todayResp := assertOK(t, doGetAdmin(e, "/admin/api/v1/dashboard/order-stats", token))
+	todayData, _ := todayResp["data"].(map[string]interface{})
+	if got, _ := todayData["order_count"].(float64); got != 0 {
+		t.Fatalf("default order-stats order_count = %v, want 0 for today's range", got)
+	}
+
+	statsResp := assertOK(t, doGetAdmin(e, "/admin/api/v1/dashboard/order-stats?range=7d", token))
+	statsData, _ := statsResp["data"].(map[string]interface{})
+	if got, _ := statsData["order_count"].(float64); got != 1 {
+		t.Fatalf("7d order-stats order_count = %v, want 1", got)
+	}
+	if got, _ := statsData["success_count"].(float64); got != 1 {
+		t.Fatalf("7d order-stats success_count = %v, want 1", got)
+	}
+
+	overviewResp := assertOK(t, doGetAdmin(e, "/admin/api/v1/dashboard/overview?range=7d", token))
+	overviewData, _ := overviewResp["data"].(map[string]interface{})
+	if got, _ := overviewData["order_count"].(float64); got != 1 {
+		t.Fatalf("7d overview order_count = %v, want 1", got)
+	}
+	if got, _ := overviewData["volume"].(float64); got != 12.5 {
+		t.Fatalf("7d overview volume = %v, want 12.5", got)
+	}
+
+	for _, path := range []string{
+		"/admin/api/v1/dashboard/asset-trend?range=7d",
+		"/admin/api/v1/dashboard/revenue-trend?range=7d",
+		"/admin/api/v1/dashboard/asset-trend?range=30d",
+		"/admin/api/v1/dashboard/revenue-trend?range=30d",
+	} {
+		resp := assertOK(t, doGetAdmin(e, path, token))
+		rows, _ := resp["data"].([]interface{})
+		day := createdAt.Format("2006-01-02")
+		found := false
+		for _, row := range rows {
+			item, _ := row.(map[string]interface{})
+			if item["day"] != day {
+				continue
+			}
+			found = true
+			if got, _ := item["order_count"].(float64); got != 1 {
+				t.Fatalf("%s order_count for %s = %v, want 1", path, day, got)
+			}
+			if got, _ := item["success_count"].(float64); got != 1 {
+				t.Fatalf("%s success_count for %s = %v, want 1", path, day, got)
+			}
+			if got, _ := item["actual_amount"].(float64); got != 12.5 {
+				t.Fatalf("%s actual_amount for %s = %v, want 12.5", path, day, got)
+			}
+		}
+		if !found {
+			t.Fatalf("%s missing historical bucket %s: %#v", path, day, rows)
+		}
+	}
+
+	addressResp := assertOK(t, doGetAdmin(e, "/admin/api/v1/dashboard/asset-trend?range=7d&group_by=address", token))
+	addressRows, _ := addressResp["data"].([]interface{})
+	day := createdAt.Format("2006-01-02")
+	foundAddress := false
+	for _, row := range addressRows {
+		item, _ := row.(map[string]interface{})
+		if item["day"] != day || item["address"] != order.ReceiveAddress {
+			continue
+		}
+		foundAddress = true
+		if got, _ := item["actual_amount"].(float64); got != 12.5 {
+			t.Fatalf("address trend actual_amount for %s = %v, want 12.5", day, got)
+		}
+	}
+	if !foundAddress {
+		t.Fatalf("address trend missing historical bucket %s/%s: %#v", day, order.ReceiveAddress, addressRows)
+	}
+}
+
+func TestAdminDashboard_TodayTrendUsesHourlyBuckets(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	now := time.Now()
+	createdAt := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, time.Local)
+	updatedAt := createdAt.Add(2 * time.Minute)
+
+	order := &mdb.Orders{
+		TradeId:        "trade-dashboard-today",
+		OrderId:        "order-dashboard-today",
+		Amount:         80,
+		Currency:       "CNY",
+		ActualAmount:   9.75,
+		ReceiveAddress: "TTestDashboardAddressHourly",
+		Token:          "USDT",
+		Network:        mdb.NetworkTron,
+		Status:         mdb.StatusPaySuccess,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create today order: %v", err)
+	}
+	if err := dao.Mdb.Model(order).Updates(map[string]interface{}{
+		"created_at": createdAt,
+		"updated_at": updatedAt,
+	}).Error; err != nil {
+		t.Fatalf("set today order time: %v", err)
+	}
+
+	for _, path := range []string{
+		"/admin/api/v1/dashboard/asset-trend?range=today",
+		"/admin/api/v1/dashboard/revenue-trend?range=today",
+	} {
+		resp := assertOK(t, doGetAdmin(e, path, token))
+		rows, _ := resp["data"].([]interface{})
+		hour := createdAt.Format("2006-01-02 15:00")
+		found := false
+		for _, row := range rows {
+			item, _ := row.(map[string]interface{})
+			if item["day"] != hour {
+				continue
+			}
+			found = true
+			if got, _ := item["order_count"].(float64); got != 1 {
+				t.Fatalf("%s order_count for %s = %v, want 1", path, hour, got)
+			}
+			if got, _ := item["success_count"].(float64); got != 1 {
+				t.Fatalf("%s success_count for %s = %v, want 1", path, hour, got)
+			}
+			if got, _ := item["actual_amount"].(float64); got != 9.75 {
+				t.Fatalf("%s actual_amount for %s = %v, want 9.75", path, hour, got)
+			}
+		}
+		if !found {
+			t.Fatalf("%s missing hourly bucket %s: %#v", path, hour, rows)
+		}
 	}
 }
 
