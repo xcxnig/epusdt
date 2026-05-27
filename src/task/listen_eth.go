@@ -71,18 +71,18 @@ func runEthereumListener(contracts []common.Address) {
 		}
 	}()
 
-	wsURL, ok := resolveChainWsURL(mdb.NetworkEthereum, "[ETH-WS]")
+	wsNode, ok := resolveChainWsNode(mdb.NetworkEthereum, "[ETH-WS]")
 	if !ok {
 		return
 	}
-	log.Sugar.Infof("[ETH-WS] connecting to %s watching %d contract(s)", wsURL, len(contracts))
+	log.Sugar.Infof("[ETH-WS] connecting using WSS node %s watching %d contract(s)", data.RpcNodeLogLabel(wsNode), len(contracts))
 
 	query := ethereum.FilterQuery{
 		Addresses: contracts,
 		Topics:    [][]common.Hash{},
 	}
 
-	runEvmWsLogListener(ctx, "[ETH-WS]", wsURL, query, func(client *ethclient.Client, vLog types.Log) {
+	runEvmWsLogListener(ctx, "[ETH-WS]", wsNode, query, func(client *ethclient.Client, vLog types.Log) {
 		if len(vLog.Topics) < 3 {
 			return
 		}

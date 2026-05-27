@@ -2,7 +2,6 @@ package admin
 
 import (
 	"encoding/json"
-	"errors"
 	"strconv"
 	"strings"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/notify"
 	"github.com/GMWalletApp/epusdt/telegram"
+	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/labstack/echo/v4"
 )
 
@@ -69,7 +69,7 @@ func (c *BaseAdminController) ListNotificationChannels(ctx echo.Context) error {
 func (c *BaseAdminController) CreateNotificationChannel(ctx echo.Context) error {
 	req := new(CreateNotificationChannelRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 	if err := c.ValidateStruct(ctx, req); err != nil {
@@ -120,7 +120,7 @@ func (c *BaseAdminController) CreateNotificationChannel(ctx echo.Context) error 
 func (c *BaseAdminController) UpdateNotificationChannel(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	existing, err := data.GetNotificationChannelByID(id)
 	if err != nil {
@@ -130,7 +130,7 @@ func (c *BaseAdminController) UpdateNotificationChannel(ctx echo.Context) error 
 
 	req := new(UpdateNotificationChannelRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	fields := map[string]interface{}{}
 	if req.Name != nil {
@@ -175,7 +175,7 @@ func (c *BaseAdminController) UpdateNotificationChannel(ctx echo.Context) error 
 func (c *BaseAdminController) ChangeNotificationChannelStatus(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	existing, err := data.GetNotificationChannelByID(id)
 	if err != nil {
@@ -185,7 +185,7 @@ func (c *BaseAdminController) ChangeNotificationChannelStatus(ctx echo.Context) 
 
 	req := new(ChangeChannelStatusRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := data.UpdateNotificationChannelFields(id, map[string]interface{}{"enabled": req.Enabled}); err != nil {
 		return c.FailJson(ctx, err)
@@ -209,7 +209,7 @@ func (c *BaseAdminController) ChangeNotificationChannelStatus(ctx echo.Context) 
 func (c *BaseAdminController) DeleteNotificationChannel(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	existing, err := data.GetNotificationChannelByID(id)
 	if err != nil {
@@ -230,12 +230,12 @@ func (c *BaseAdminController) DeleteNotificationChannel(ctx echo.Context) error 
 // + chat_id; webhook/email kept loose until those senders exist.
 func validateChannelConfig(channelType string, cfg map[string]interface{}) error {
 	if cfg == nil {
-		return errors.New("config required")
+		return constant.NotificationConfigErr
 	}
 	if channelType == mdb.NotificationTypeTelegram {
 		configJSON, _ := json.Marshal(cfg)
 		if _, err := notify.ParseTelegramConfig(string(configJSON)); err != nil {
-			return err
+			return constant.NotificationConfigErr
 		}
 	}
 	return nil
@@ -260,10 +260,10 @@ func normalizeChannelEvents(raw interface{}) (map[string]bool, error) {
 			case "1", "true", "on", "yes":
 				return true, nil
 			default:
-				return false, errors.New("invalid boolean string")
+				return false, constant.NotificationEventsErr
 			}
 		default:
-			return false, errors.New("invalid event value type")
+			return false, constant.NotificationEventsErr
 		}
 	}
 
@@ -299,7 +299,7 @@ func normalizeChannelEvents(raw interface{}) (map[string]bool, error) {
 		for _, v := range t {
 			s, ok := v.(string)
 			if !ok {
-				return nil, errors.New("events array must contain strings")
+				return nil, constant.NotificationEventsErr
 			}
 			s = trimKey(s)
 			if s == "" {
@@ -309,6 +309,6 @@ func normalizeChannelEvents(raw interface{}) (map[string]bool, error) {
 		}
 		return out, nil
 	default:
-		return nil, errors.New("events must be object or string array")
+		return nil, constant.NotificationEventsErr
 	}
 }

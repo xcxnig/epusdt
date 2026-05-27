@@ -37,6 +37,7 @@ func RegisterRoute(e *echo.Echo) {
 
 	payRoute.GET("/checkout-counter-resp/:trade_id", comm.Ctrl.CheckoutCounter)
 	payRoute.GET("/check-status/:trade_id", comm.Ctrl.CheckStatus)
+	payRoute.POST("/submit-tx-hash/:trade_id", comm.Ctrl.SubmitTxHash)
 	payRoute.POST("/switch-network", comm.Ctrl.SwitchNetwork)
 
 	// payment routes
@@ -74,7 +75,7 @@ func RegisterRoute(e *echo.Echo) {
 
 		formParams, err := ctx.FormParams()
 		if err != nil && ctx.Request().Method == http.MethodPost {
-			return comm.Ctrl.FailJson(ctx, fmt.Errorf("invalid epay form params: %w", err))
+			return comm.Ctrl.FailJson(ctx, constant.ParamsMarshalErr)
 		}
 		if err == nil {
 			copyParams(formParams)
@@ -131,7 +132,7 @@ func RegisterRoute(e *echo.Echo) {
 
 		amountFloat, err := strconv.ParseFloat(money, 64)
 		if err != nil {
-			return comm.Ctrl.FailJson(ctx, fmt.Errorf("invalid money value: %s", money))
+			return comm.Ctrl.FailJson(ctx, constant.PayAmountErr)
 		}
 
 		body := map[string]interface{}{
@@ -153,7 +154,7 @@ func RegisterRoute(e *echo.Echo) {
 
 		jsonBytes, err := json.Marshal(body)
 		if err != nil {
-			return comm.Ctrl.FailJson(ctx, err)
+			return comm.Ctrl.FailJson(ctx, constant.SystemErr)
 		}
 
 		ctx.Request().Body = io.NopCloser(bytes.NewBuffer(jsonBytes))

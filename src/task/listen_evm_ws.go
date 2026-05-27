@@ -2,8 +2,11 @@ package task
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/util/log"
 
 	"github.com/ethereum/go-ethereum"
@@ -11,18 +14,21 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-// runEvmWsLogListener connects to wsURL, subscribes to Transfer logs,
+// runEvmWsLogListener connects to node.Url, subscribes to Transfer logs,
 // and dispatches each log to handleLog. It retries on transient errors
-// with exponential backoff. The ctx lets the caller trigger a clean
-// exit — e.g. when admin disables the chain, the caller cancels the
-// context and the function returns instead of reconnecting forever.
-func runEvmWsLogListener(ctx context.Context, logPrefix, wsURL string, query ethereum.FilterQuery, handleLog func(*ethclient.Client, types.Log)) {
+// with exponential backoff until the node reaches the failure threshold.
+// The ctx lets the caller trigger a clean exit — e.g. when admin disables
+// the chain, the caller cancels the context and the function returns.
+func runEvmWsLogListener(ctx context.Context, logPrefix string, node mdb.RpcNode, query ethereum.FilterQuery, handleLog func(*ethclient.Client, types.Log)) {
 	const (
-		minBackoff = 2 * time.Second
-		maxBackoff = 60 * time.Second
-		rejoinWait = 3 * time.Second
+		minBackoff       = 2 * time.Second
+		maxBackoff       = 60 * time.Second
+		rejoinWait       = 3 * time.Second
+		stableResetAfter = 60 * time.Second
 	)
 	failWait := minBackoff
+	wsURL := node.Url
+	nodeLabel := data.RpcNodeLogLabel(node)
 
 	for {
 		if ctx.Err() != nil {
@@ -32,6 +38,9 @@ func runEvmWsLogListener(ctx context.Context, logPrefix, wsURL string, query eth
 		client, err := ethclient.Dial(wsURL)
 		if err != nil {
 			log.Sugar.Warnf("%s dial: %v, retry in %s", logPrefix, err, failWait)
+			if recordEvmWsNodeFailure(logPrefix, node, "dial") {
+				return
+			}
 			if !sleepOrDone(ctx, failWait) {
 				return
 			}
@@ -44,6 +53,9 @@ func runEvmWsLogListener(ctx context.Context, logPrefix, wsURL string, query eth
 		if err != nil {
 			client.Close()
 			log.Sugar.Warnf("%s subscribe: %v, retry in %s", logPrefix, err, failWait)
+			if recordEvmWsNodeFailure(logPrefix, node, "subscribe") {
+				return
+			}
 			if !sleepOrDone(ctx, failWait) {
 				return
 			}
@@ -52,11 +64,17 @@ func runEvmWsLogListener(ctx context.Context, logPrefix, wsURL string, query eth
 		}
 		failWait = minBackoff
 
-		log.Sugar.Infof("%s connected, subscribed to Transfer logs", logPrefix)
+		log.Sugar.Infof("%s connected, subscribed to Transfer logs using WSS node %s", logPrefix, nodeLabel)
 
-		recvLoop(ctx, client, sub, logsCh, logPrefix, handleLog)
+		connectedAt := time.Now()
+		recvErr := recvLoop(ctx, client, sub, logsCh, logPrefix, handleLog)
 
 		if ctx.Err() != nil {
+			return
+		}
+		if time.Since(connectedAt) >= stableResetAfter {
+			data.RecordRpcNodeSuccess(node.ID)
+		} else if recvErr != nil && recordEvmWsNodeFailure(logPrefix, node, recvErr.Error()) {
 			return
 		}
 		if !sleepOrDone(ctx, rejoinWait) {
@@ -65,7 +83,7 @@ func runEvmWsLogListener(ctx context.Context, logPrefix, wsURL string, query eth
 	}
 }
 
-func recvLoop(ctx context.Context, client *ethclient.Client, sub ethereum.Subscription, logsCh <-chan types.Log, logPrefix string, handleLog func(*ethclient.Client, types.Log)) {
+func recvLoop(ctx context.Context, client *ethclient.Client, sub ethereum.Subscription, logsCh <-chan types.Log, logPrefix string, handleLog func(*ethclient.Client, types.Log)) error {
 	defer func() {
 		sub.Unsubscribe()
 		client.Close()
@@ -75,22 +93,34 @@ func recvLoop(ctx context.Context, client *ethclient.Client, sub ethereum.Subscr
 		select {
 		case <-ctx.Done():
 			log.Sugar.Infof("%s context cancelled, stopping", logPrefix)
-			return
+			return nil
 		case err := <-sub.Err():
 			if err != nil {
 				log.Sugar.Warnf("%s subscription error: %v, reconnecting", logPrefix, err)
+				return fmt.Errorf("subscription error")
 			} else {
 				log.Sugar.Warnf("%s subscription closed, reconnecting", logPrefix)
+				return fmt.Errorf("subscription closed")
 			}
-			return
 		case vLog, ok := <-logsCh:
 			if !ok {
 				log.Sugar.Warnf("%s log channel closed, reconnecting", logPrefix)
-				return
+				return fmt.Errorf("log channel closed")
 			}
 			handleLog(client, vLog)
 		}
 	}
+}
+
+func recordEvmWsNodeFailure(logPrefix string, node mdb.RpcNode, reason string) bool {
+	failures, cooling := data.RecordRpcNodeFailure(node.ID)
+	nodeLabel := data.RpcNodeLogLabel(node)
+	if !cooling {
+		log.Sugar.Warnf("%s WSS node failed (%s), node=%s failures=%d/%d", logPrefix, reason, nodeLabel, failures, data.RpcFailoverThreshold)
+		return false
+	}
+	log.Sugar.Warnf("%s WSS node reached fail threshold (%s), node=%s, resolving another node", logPrefix, reason, nodeLabel)
+	return true
 }
 
 // sleepOrDone waits for d or for ctx cancellation, whichever comes

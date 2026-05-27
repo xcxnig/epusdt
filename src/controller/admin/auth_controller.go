@@ -5,6 +5,7 @@ import (
 
 	"github.com/GMWalletApp/epusdt/model/data"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/constant"
 	appjwt "github.com/GMWalletApp/epusdt/util/jwt"
 	"github.com/labstack/echo/v4"
 )
@@ -53,7 +54,7 @@ type InitialPasswordResponse struct {
 func (c *BaseAdminController) Login(ctx echo.Context) error {
 	req := new(LoginRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := c.ValidateStruct(ctx, req); err != nil {
 		return c.FailJson(ctx, err)
@@ -63,10 +64,10 @@ func (c *BaseAdminController) Login(ctx echo.Context) error {
 		return c.FailJson(ctx, err)
 	}
 	if user.ID == 0 || !data.VerifyPassword(user.PasswordHash, req.Password) {
-		return c.FailJson(ctx, errors.New("invalid username or password"))
+		return c.FailJson(ctx, constant.AdminInvalidCredentialErr)
 	}
 	if user.Status != mdb.AdminUserStatusEnable {
-		return c.FailJson(ctx, errors.New("user disabled"))
+		return c.FailJson(ctx, constant.AdminUserDisabledErr)
 	}
 	token, err := appjwt.Sign(user.ID, user.Username)
 	if err != nil {
@@ -94,6 +95,9 @@ func (c *BaseAdminController) Login(ctx echo.Context) error {
 func (c *BaseAdminController) GetInitialPassword(ctx echo.Context) error {
 	password, err := data.ConsumeInitialAdminPassword()
 	if err != nil {
+		if errors.Is(err, data.ErrInitAdminPasswordAlreadyFetched) || errors.Is(err, data.ErrInitAdminPasswordUnavailable) {
+			return c.FailJson(ctx, constant.InitialAdminPasswordErr)
+		}
 		return c.FailJson(ctx, err)
 	}
 	return c.SucJson(ctx, InitialPasswordResponse{
@@ -144,14 +148,14 @@ func (c *BaseAdminController) Logout(ctx echo.Context) error {
 func (c *BaseAdminController) Me(ctx echo.Context) error {
 	uid := currentAdminUserID(ctx)
 	if uid == 0 {
-		return c.FailJson(ctx, errors.New("unauthorized"))
+		return c.FailJson(ctx, constant.AdminUnauthorizedErr)
 	}
 	user, err := data.GetAdminUserByID(uid)
 	if err != nil {
 		return c.FailJson(ctx, err)
 	}
 	if user.ID == 0 {
-		return c.FailJson(ctx, errors.New("user not found"))
+		return c.FailJson(ctx, constant.AdminUserNotFoundErr)
 	}
 	// Warn the frontend when the operator hasn't changed the seeded
 	// initial password.
@@ -176,11 +180,11 @@ func (c *BaseAdminController) Me(ctx echo.Context) error {
 func (c *BaseAdminController) ChangePassword(ctx echo.Context) error {
 	uid := currentAdminUserID(ctx)
 	if uid == 0 {
-		return c.FailJson(ctx, errors.New("unauthorized"))
+		return c.FailJson(ctx, constant.AdminUnauthorizedErr)
 	}
 	req := new(ChangePasswordRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := c.ValidateStruct(ctx, req); err != nil {
 		return c.FailJson(ctx, err)
@@ -190,7 +194,7 @@ func (c *BaseAdminController) ChangePassword(ctx echo.Context) error {
 		return c.FailJson(ctx, err)
 	}
 	if user.ID == 0 || !data.VerifyPassword(user.PasswordHash, req.OldPassword) {
-		return c.FailJson(ctx, errors.New("old password incorrect"))
+		return c.FailJson(ctx, constant.AdminOldPasswordErr)
 	}
 	if err := data.UpdateAdminUserPassword(uid, req.NewPassword); err != nil {
 		return c.FailJson(ctx, err)

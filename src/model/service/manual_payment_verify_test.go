@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -114,6 +115,154 @@ func TestManualVerifyDialEvmClientsIncludesHTTPNode(t *testing.T) {
 	}
 	if !strings.Contains(clients[0].label, mdb.RpcNodeTypeHttp) {
 		t.Fatalf("client label = %q, want HTTP node", clients[0].label)
+	}
+}
+
+func TestManualVerifyEvmCandidatesPreferGeneralAcrossNodeTypes(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	rows := []mdb.RpcNode{
+		{Network: mdb.NetworkEthereum, Type: mdb.RpcNodeTypeHttp, Url: "http://manual.example.com", Weight: 100, Enabled: true, Purpose: mdb.RpcNodePurposeManualVerify, Status: mdb.RpcNodeStatusOk},
+		{Network: mdb.NetworkEthereum, Type: mdb.RpcNodeTypeWs, Url: "ws://general.example.com", Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusOk},
+	}
+	if err := dao.Mdb.Create(&rows).Error; err != nil {
+		t.Fatalf("seed rpc_nodes: %v", err)
+	}
+
+	got, err := listManualEvmRpcCandidates(mdb.NetworkEthereum)
+	if err != nil {
+		t.Fatalf("listManualEvmRpcCandidates(): %v", err)
+	}
+	urls := make([]string, 0, len(got))
+	for _, node := range got {
+		urls = append(urls, node.Url)
+	}
+	want := []string{"ws://general.example.com", "http://manual.example.com"}
+	if len(urls) != len(want) {
+		t.Fatalf("candidate urls = %#v, want %#v", urls, want)
+	}
+	for i := range want {
+		if urls[i] != want[i] {
+			t.Fatalf("candidate urls = %#v, want %#v", urls, want)
+		}
+	}
+}
+
+func TestManualRpcNodeLabelHidesSensitiveURLParts(t *testing.T) {
+	label := manualRpcNodeLabel(mdb.RpcNode{
+		BaseModel: mdb.BaseModel{ID: 9},
+		Network:   mdb.NetworkEthereum,
+		Type:      mdb.RpcNodeTypeHttp,
+		Url:       "https://rpc.example.com/v3/secret-key?token=secret",
+		Purpose:   mdb.RpcNodePurposeManualVerify,
+	})
+	if strings.Contains(label, "secret") || strings.Contains(label, "/v3/") {
+		t.Fatalf("manualRpcNodeLabel() leaked sensitive URL parts: %s", label)
+	}
+	if !strings.Contains(label, "endpoint=https://rpc.example.com") {
+		t.Fatalf("manualRpcNodeLabel() = %s, want sanitized endpoint", label)
+	}
+	if !strings.Contains(label, "purpose=manual_verify") {
+		t.Fatalf("manualRpcNodeLabel() = %s, want purpose", label)
+	}
+}
+
+func TestManualVerifyDialEvmClientDoesNotForwardUserIPHeader(t *testing.T) {
+	var headerCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-USER-IP"); got != "" {
+			t.Errorf("X-USER-IP header = %q, want empty", got)
+			http.Error(w, "unexpected user ip header", http.StatusBadRequest)
+			return
+		}
+		atomic.AddInt32(&headerCalls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"error": map[string]interface{}{
+				"code":    -32000,
+				"message": "not found",
+			},
+		})
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, err := dialManualEvmClient(ctx, mdb.RpcNode{
+		Network: mdb.NetworkEthereum,
+		Type:    mdb.RpcNodeTypeHttp,
+		Url:     server.URL,
+		Purpose: mdb.RpcNodePurposeManualVerify,
+	})
+	if err != nil {
+		t.Fatalf("dialManualEvmClient(): %v", err)
+	}
+	defer client.Close()
+
+	_, _ = client.TransactionReceipt(ctx, common.HexToHash("0x"+strings.Repeat("a", 64)))
+	if got := atomic.LoadInt32(&headerCalls); got == 0 {
+		t.Fatal("manual verify EVM request did not reach test RPC")
+	}
+}
+
+func TestManualVerifyDialEvmClientDoesNotForwardUserIPForGeneralNode(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-USER-IP"); got != "" {
+			t.Errorf("X-USER-IP header = %q, want empty", got)
+			http.Error(w, "unexpected user ip header", http.StatusBadRequest)
+			return
+		}
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"error": map[string]interface{}{
+				"code":    -32000,
+				"message": "not found",
+			},
+		})
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, err := dialManualEvmClient(ctx, mdb.RpcNode{
+		Network: mdb.NetworkEthereum,
+		Type:    mdb.RpcNodeTypeHttp,
+		Url:     server.URL,
+		Purpose: mdb.RpcNodePurposeGeneral,
+	})
+	if err != nil {
+		t.Fatalf("dialManualEvmClient(): %v", err)
+	}
+	defer client.Close()
+
+	_, _ = client.TransactionReceipt(ctx, common.HexToHash("0x"+strings.Repeat("a", 64)))
+	if got := atomic.LoadInt32(&calls); got == 0 {
+		t.Fatal("general EVM request did not reach test RPC")
+	}
+}
+
+func TestTronPostJSONDoesNotForwardUserIPWithoutHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-USER-IP"); got != "" {
+			t.Errorf("X-USER-IP header = %q, want empty", got)
+			http.Error(w, "unexpected user ip header", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	var out map[string]interface{}
+	if err := tronPostJSON(server.URL, "", "/wallet/getnowblock", map[string]interface{}{}, &out); err != nil {
+		t.Fatalf("tronPostJSON(): %v", err)
 	}
 }
 
@@ -271,7 +420,12 @@ func TestManualVerifyTronPaymentHTTPFlow(t *testing.T) {
 
 	rawAmount := big.NewInt(1230000)
 	blockTimeMs := time.Now().Add(time.Minute).UnixMilli()
+	requestCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-USER-IP"); got != "" {
+			t.Errorf("X-USER-IP header = %q, want empty", got)
+		}
+		requestCalls++
 		var req map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Errorf("decode tron request: %v", err)
@@ -333,6 +487,7 @@ func TestManualVerifyTronPaymentHTTPFlow(t *testing.T) {
 		Url:     server.URL,
 		Enabled: true,
 		Status:  mdb.RpcNodeStatusOk,
+		Purpose: mdb.RpcNodePurposeManualVerify,
 	}).Error; err != nil {
 		t.Fatalf("create tron rpc node: %v", err)
 	}
@@ -365,6 +520,9 @@ func TestManualVerifyTronPaymentHTTPFlow(t *testing.T) {
 	}
 	if got != txID {
 		t.Fatalf("canonical tx id = %q, want %q", got, txID)
+	}
+	if requestCalls != 3 {
+		t.Fatalf("manual verify request calls = %d, want 3", requestCalls)
 	}
 }
 

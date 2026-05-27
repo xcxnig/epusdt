@@ -28,6 +28,7 @@ func setupSolanaRPCNode(t *testing.T, url string) func() {
 		Type:    mdb.RpcNodeTypeHttp,
 		Weight:  1,
 		Enabled: true,
+		Purpose: mdb.RpcNodePurposeGeneral,
 		Status:  mdb.RpcNodeStatusOk,
 	}
 	if err := dao.Mdb.Create(node).Error; err != nil {
@@ -56,6 +57,263 @@ func TestResolveSolanaRpcURLWithRow(t *testing.T) {
 	}
 	if got != "https://solana.example.com" {
 		t.Fatalf("resolveSolanaRpcURL() = %q, want https://solana.example.com", got)
+	}
+}
+
+func TestResolveSolanaRpcURLIgnoresManualVerifyOnly(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := dao.Mdb.Create(&mdb.RpcNode{
+		Network: mdb.NetworkSolana,
+		Url:     "https://paid-solana.example.com",
+		Type:    mdb.RpcNodeTypeHttp,
+		Weight:  100,
+		Enabled: true,
+		Purpose: mdb.RpcNodePurposeManualVerify,
+		Status:  mdb.RpcNodeStatusOk,
+	}).Error; err != nil {
+		t.Fatalf("seed manual rpc_node: %v", err)
+	}
+
+	if got, err := resolveSolanaRpcURL(); err == nil {
+		t.Fatalf("resolveSolanaRpcURL() = %q, nil; want error", got)
+	}
+}
+
+func TestResolveSolanaRpcURLUsesGeneralWhenManualVerifyExists(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	rows := []mdb.RpcNode{
+		{Network: mdb.NetworkSolana, Url: "https://paid-solana.example.com", Type: mdb.RpcNodeTypeHttp, Weight: 100, Enabled: true, Purpose: mdb.RpcNodePurposeManualVerify, Status: mdb.RpcNodeStatusOk},
+		{Network: mdb.NetworkSolana, Url: " https://general-solana.example.com ", Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusOk},
+	}
+	if err := dao.Mdb.Create(&rows).Error; err != nil {
+		t.Fatalf("seed rpc_nodes: %v", err)
+	}
+
+	got, err := resolveSolanaRpcURL()
+	if err != nil {
+		t.Fatalf("resolveSolanaRpcURL(): %v", err)
+	}
+	if got != "https://general-solana.example.com" {
+		t.Fatalf("resolveSolanaRpcURL() = %q, want general node", got)
+	}
+}
+
+func TestSolRetryClientSwitchesAfterFailureThreshold(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+	data.ResetRpcFailoverForTest()
+	t.Cleanup(data.ResetRpcFailoverForTest)
+	oldRetryCount := solRPCRetryCount
+	oldRetryWait := solRPCRetryWait
+	oldRetryMaxWait := solRPCRetryMaxWait
+	solRPCRetryCount = 0
+	solRPCRetryWait = time.Millisecond
+	solRPCRetryMaxWait = time.Millisecond
+	t.Cleanup(func() {
+		solRPCRetryCount = oldRetryCount
+		solRPCRetryWait = oldRetryWait
+		solRPCRetryMaxWait = oldRetryMaxWait
+	})
+
+	var primaryCalls int
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls++
+		http.Error(w, "temporary", http.StatusBadGateway)
+	}))
+	defer primary.Close()
+
+	var backupCalls int
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backupCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"result":  "ok",
+		})
+	}))
+	defer backup.Close()
+
+	rows := []mdb.RpcNode{
+		{Network: mdb.NetworkSolana, Url: primary.URL, Type: mdb.RpcNodeTypeHttp, Weight: 100, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusOk},
+		{Network: mdb.NetworkSolana, Url: backup.URL, Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusOk},
+	}
+	if err := dao.Mdb.Create(&rows).Error; err != nil {
+		t.Fatalf("seed rpc_nodes: %v", err)
+	}
+
+	for i := 0; i < data.RpcFailoverThreshold-1; i++ {
+		if _, err := SolRetryClient("getHealth", nil); err == nil {
+			t.Fatalf("SolRetryClient attempt %d unexpectedly succeeded", i+1)
+		}
+	}
+	if backupCalls != 0 {
+		t.Fatalf("backup calls before threshold = %d, want 0", backupCalls)
+	}
+
+	body, err := SolRetryClient("getHealth", nil)
+	if err != nil {
+		t.Fatalf("SolRetryClient after threshold: %v", err)
+	}
+	if gjson.GetBytes(body, "result").String() != "ok" {
+		t.Fatalf("response body = %s, want result ok", string(body))
+	}
+	if backupCalls == 0 {
+		t.Fatal("backup RPC was not called after threshold")
+	}
+	if primaryCalls == 0 {
+		t.Fatal("primary RPC was not called")
+	}
+}
+
+func TestSolRetryClientCountsJSONRPCErrorAsNodeFailure(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+	data.ResetRpcFailoverForTest()
+	t.Cleanup(data.ResetRpcFailoverForTest)
+	oldRetryCount := solRPCRetryCount
+	oldRetryWait := solRPCRetryWait
+	oldRetryMaxWait := solRPCRetryMaxWait
+	solRPCRetryCount = 0
+	solRPCRetryWait = time.Millisecond
+	solRPCRetryMaxWait = time.Millisecond
+	t.Cleanup(func() {
+		solRPCRetryCount = oldRetryCount
+		solRPCRetryWait = oldRetryWait
+		solRPCRetryMaxWait = oldRetryMaxWait
+	})
+
+	var primaryCalls int
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"error": map[string]interface{}{
+				"code": -32005,
+			},
+		})
+	}))
+	defer primary.Close()
+
+	var backupCalls int
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backupCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"result":  "ok",
+		})
+	}))
+	defer backup.Close()
+
+	rows := []mdb.RpcNode{
+		{Network: mdb.NetworkSolana, Url: primary.URL, Type: mdb.RpcNodeTypeHttp, Weight: 100, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusOk},
+		{Network: mdb.NetworkSolana, Url: backup.URL, Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusOk},
+	}
+	if err := dao.Mdb.Create(&rows).Error; err != nil {
+		t.Fatalf("seed rpc_nodes: %v", err)
+	}
+
+	for i := 0; i < data.RpcFailoverThreshold-1; i++ {
+		if _, err := SolRetryClient("getHealth", nil); err == nil {
+			t.Fatalf("SolRetryClient attempt %d unexpectedly succeeded", i+1)
+		}
+	}
+	body, err := SolRetryClient("getHealth", nil)
+	if err != nil {
+		t.Fatalf("SolRetryClient after JSON-RPC error threshold: %v", err)
+	}
+	if gjson.GetBytes(body, "result").String() != "ok" {
+		t.Fatalf("response body = %s, want result ok", string(body))
+	}
+	if primaryCalls < data.RpcFailoverThreshold {
+		t.Fatalf("primary calls = %d, want at least threshold", primaryCalls)
+	}
+	if backupCalls == 0 {
+		t.Fatal("backup RPC was not called after JSON-RPC error threshold")
+	}
+}
+
+func TestSolRetryClientWithURLHeadersForwardsCustomHeaders(t *testing.T) {
+	oldRetryCount := solRPCRetryCount
+	oldRetryWait := solRPCRetryWait
+	oldRetryMaxWait := solRPCRetryMaxWait
+	solRPCRetryCount = 0
+	solRPCRetryWait = time.Millisecond
+	solRPCRetryMaxWait = time.Millisecond
+	t.Cleanup(func() {
+		solRPCRetryCount = oldRetryCount
+		solRPCRetryWait = oldRetryWait
+		solRPCRetryMaxWait = oldRetryMaxWait
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Test-Header"); got != "test-value" {
+			t.Errorf("X-Test-Header = %q, want test-value", got)
+			http.Error(w, "bad custom header", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"result":  "ok",
+		})
+	}))
+	defer server.Close()
+
+	headers := http.Header{}
+	headers.Set("X-Test-Header", "test-value")
+	body, err := solRetryClientWithURLHeaders(server.URL, "getHealth", nil, headers)
+	if err != nil {
+		t.Fatalf("solRetryClientWithURLHeaders(): %v", err)
+	}
+	if gjson.GetBytes(body, "result").String() != "ok" {
+		t.Fatalf("response body = %s, want result ok", string(body))
+	}
+}
+
+func TestSolRetryClientWithURLDoesNotForwardUserIPByDefault(t *testing.T) {
+	oldRetryCount := solRPCRetryCount
+	oldRetryWait := solRPCRetryWait
+	oldRetryMaxWait := solRPCRetryMaxWait
+	solRPCRetryCount = 0
+	solRPCRetryWait = time.Millisecond
+	solRPCRetryMaxWait = time.Millisecond
+	t.Cleanup(func() {
+		solRPCRetryCount = oldRetryCount
+		solRPCRetryWait = oldRetryWait
+		solRPCRetryMaxWait = oldRetryMaxWait
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-USER-IP"); got != "" {
+			t.Errorf("X-USER-IP header = %q, want empty", got)
+			http.Error(w, "unexpected user ip header", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"result":  "ok",
+		})
+	}))
+	defer server.Close()
+
+	body, err := solRetryClientWithURL(server.URL, "getHealth", nil)
+	if err != nil {
+		t.Fatalf("solRetryClientWithURL(): %v", err)
+	}
+	if gjson.GetBytes(body, "result").String() != "ok" {
+		t.Fatalf("response body = %s, want result ok", string(body))
 	}
 }
 

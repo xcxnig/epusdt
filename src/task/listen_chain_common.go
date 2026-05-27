@@ -93,19 +93,28 @@ func loadChainTokenContracts(network, logPrefix string) []common.Address {
 // given network. If no enabled node is configured, the caller skips the
 // current listener run so admin-side disabled/deleted rows are respected.
 func resolveChainWsURL(network, logPrefix string) (string, bool) {
-	node, err := data.SelectRpcNode(network, mdb.RpcNodeTypeWs)
+	node, ok := resolveChainWsNode(network, logPrefix)
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(node.Url), true
+}
+
+func resolveChainWsNode(network, logPrefix string, excludeIDs ...uint64) (mdb.RpcNode, bool) {
+	node, err := data.SelectGeneralRpcNode(network, mdb.RpcNodeTypeWs, excludeIDs...)
 	if err == nil && node != nil && node.ID > 0 {
 		rpcURL := strings.TrimSpace(node.Url)
 		if rpcURL != "" {
-			return rpcURL, true
+			node.Url = rpcURL
+			return *node, true
 		}
 		log.Sugar.Errorf("%s rpc_nodes id=%d has empty url", logPrefix, node.ID)
-		return "", false
+		return mdb.RpcNode{}, false
 	}
 	if err != nil {
 		log.Sugar.Errorf("%s resolve rpc_nodes err=%v", logPrefix, err)
 	} else {
 		log.Sugar.Warnf("%s no enabled %s WS RPC node configured in rpc_nodes", logPrefix, network)
 	}
-	return "", false
+	return mdb.RpcNode{}, false
 }

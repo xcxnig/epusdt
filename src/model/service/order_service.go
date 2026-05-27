@@ -1,12 +1,12 @@
 package service
 
 import (
+	cryptorand "crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
-	"math/rand"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/GMWalletApp/epusdt/config"
 	"github.com/GMWalletApp/epusdt/model/dao"
@@ -17,6 +17,7 @@ import (
 	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/GMWalletApp/epusdt/util/math"
+	"github.com/GMWalletApp/epusdt/util/security"
 	"github.com/dromara/carbon/v2"
 	"github.com/shopspring/decimal"
 )
@@ -54,12 +55,17 @@ func normalizeOrderAddressByNetwork(network, address string) string {
 
 // CreateTransaction creates a new payment order.
 func CreateTransaction(req *request.CreateTransactionRequest, apiKey *mdb.ApiKey) (*response.CreateTransactionResponse, error) {
-	gCreateTransactionLock.Lock()
-	defer gCreateTransactionLock.Unlock()
-
 	token := strings.ToUpper(strings.TrimSpace(req.Token))
 	currency := strings.ToUpper(strings.TrimSpace(req.Currency))
 	network := strings.ToLower(strings.TrimSpace(req.Network))
+	notifyURL := strings.TrimSpace(req.NotifyUrl)
+	if err := security.ValidatePublicHTTPURL(notifyURL); err != nil {
+		return nil, constant.NotifyURLErr
+	}
+
+	gCreateTransactionLock.Lock()
+	defer gCreateTransactionLock.Unlock()
+
 	amountPrecision := data.GetAmountPrecision()
 	payAmount := math.MustParsePrecFloat64(req.Amount, amountPrecision)
 	rate := config.GetRateForCoin(strings.ToLower(token), strings.ToLower(currency))
@@ -116,7 +122,7 @@ func CreateTransaction(req *request.CreateTransactionRequest, apiKey *mdb.ApiKey
 		Token:          token,
 		Network:        network,
 		Status:         mdb.StatusWaitPay,
-		NotifyUrl:      req.NotifyUrl,
+		NotifyUrl:      notifyURL,
 		RedirectUrl:    req.RedirectUrl,
 		Name:           req.Name,
 		PaymentType:    req.PaymentType,
@@ -316,9 +322,11 @@ func ReserveAvailableWalletAndAmount(tradeID string, network string, token strin
 
 // GenerateCode creates a unique trade id.
 func GenerateCode() string {
-	date := time.Now().Format("20060102")
-	r := rand.Intn(1000)
-	return fmt.Sprintf("%s%d%03d", date, time.Now().UnixNano()/1e6, r)
+	buf := make([]byte, 18)
+	if _, err := cryptorand.Read(buf); err != nil {
+		panic(fmt.Sprintf("generate trade id: crypto/rand failed: %v", err))
+	}
+	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
 // GetOrderInfoByTradeId returns a validated order.
@@ -331,6 +339,92 @@ func GetOrderInfoByTradeId(tradeId string) (*mdb.Orders, error) {
 		return nil, constant.OrderNotExists
 	}
 	return order, nil
+}
+
+// SubmitManualPayment verifies a submitted transaction hash and marks the
+// matching on-chain order paid using the same path as automatic chain scans.
+func SubmitManualPayment(tradeId, blockTransactionId string) (*response.ManualPaymentResponse, error) {
+	tradeId = strings.TrimSpace(tradeId)
+	blockTransactionId = strings.TrimSpace(blockTransactionId)
+
+	order, err := GetOrderInfoByTradeId(tradeId)
+	if err != nil {
+		return nil, err
+	}
+	return submitManualPaymentForOrder(order, blockTransactionId)
+}
+
+// SubmitCashierManualPayment is the public cashier variant. It rejects hashes
+// already stored on any order before touching RPC so repeated/public probes do
+// not spend RPC quota. Admin mark-paid intentionally keeps using
+// SubmitManualPayment and the existing verification path.
+func SubmitCashierManualPayment(tradeId, blockTransactionId string) (*response.ManualPaymentResponse, error) {
+	tradeId = strings.TrimSpace(tradeId)
+	blockTransactionId = strings.TrimSpace(blockTransactionId)
+
+	order, err := GetOrderInfoByTradeId(tradeId)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateManualPaymentOrder(order); err != nil {
+		return nil, err
+	}
+	if err = ensureManualBlockTransactionUnused(order, blockTransactionId); err != nil {
+		return nil, err
+	}
+	return submitManualPaymentForOrder(order, blockTransactionId)
+}
+
+func submitManualPaymentForOrder(order *mdb.Orders, blockTransactionId string) (*response.ManualPaymentResponse, error) {
+	blockTransactionId = strings.TrimSpace(blockTransactionId)
+	if err := validateManualPaymentOrder(order); err != nil {
+		return nil, err
+	}
+
+	verifiedBlockTransactionID, err := ValidateManualOrderPayment(order, blockTransactionId)
+	if err != nil {
+		var rspErr *constant.RspError
+		if errors.As(err, &rspErr) {
+			return nil, err
+		}
+		return nil, constant.ManualPaymentVerifyErr
+	}
+	if err = OrderProcessing(&request.OrderProcessingRequest{
+		ReceiveAddress:     order.ReceiveAddress,
+		Currency:           order.Currency,
+		Token:              order.Token,
+		Network:            order.Network,
+		Amount:             order.ActualAmount,
+		TradeId:            order.TradeId,
+		BlockTransactionId: verifiedBlockTransactionID,
+	}); err != nil {
+		return nil, err
+	}
+
+	updatedOrder, err := GetOrderInfoByTradeId(order.TradeId)
+	if err != nil {
+		return nil, err
+	}
+	return &response.ManualPaymentResponse{
+		TradeId:            updatedOrder.TradeId,
+		Status:             updatedOrder.Status,
+		BlockTransactionId: updatedOrder.BlockTransactionId,
+	}, nil
+}
+
+func validateManualPaymentOrder(order *mdb.Orders) error {
+	if order.Status != mdb.StatusWaitPay {
+		return constant.OrderNotWaitPay
+	}
+	if !isOnChainOrder(order.PayProvider) {
+		return constant.ManualPaymentProviderErr
+	}
+	return nil
+}
+
+func isOnChainOrder(payProvider string) bool {
+	payProvider = strings.TrimSpace(payProvider)
+	return payProvider == "" || payProvider == mdb.PaymentProviderOnChain
 }
 
 const MaxSubOrders = 2
@@ -588,7 +682,7 @@ func switchToOkPay(parent *mdb.Orders, token string) (*response.CheckoutCounterR
 	if err != nil {
 		_ = data.MarkProviderOrderFailed(subTradeID, mdb.PaymentProviderOkPay)
 		_ = data.ExpireOrderByTradeID(subTradeID)
-		return nil, err
+		return nil, constant.PaymentProviderCreateErr
 	}
 	if err = data.UpdateProviderOrderCreated(subTradeID, mdb.PaymentProviderOkPay, okpayOrder.ProviderOrderID, okpayOrder.PayURL); err != nil {
 		_ = data.MarkProviderOrderFailed(subTradeID, mdb.PaymentProviderOkPay)

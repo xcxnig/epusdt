@@ -6,6 +6,7 @@ import (
 
 	"github.com/GMWalletApp/epusdt/model/data"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/labstack/echo/v4"
 )
 
@@ -65,7 +66,7 @@ func (c *BaseAdminController) ListChainTokens(ctx echo.Context) error {
 func (c *BaseAdminController) CreateChainToken(ctx echo.Context) error {
 	req := new(CreateChainTokenRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := c.ValidateStruct(ctx, req); err != nil {
 		return c.FailJson(ctx, err)
@@ -107,11 +108,11 @@ func (c *BaseAdminController) CreateChainToken(ctx echo.Context) error {
 func (c *BaseAdminController) UpdateChainToken(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	req := new(UpdateChainTokenRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	fields := map[string]interface{}{}
 	if req.ContractAddress != nil {
@@ -147,11 +148,11 @@ func (c *BaseAdminController) UpdateChainToken(ctx echo.Context) error {
 func (c *BaseAdminController) ChangeChainTokenStatus(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	req := new(ChangeChainTokenStatusRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := data.UpdateChainTokenFields(id, map[string]interface{}{"enabled": req.Enabled}); err != nil {
 		return c.FailJson(ctx, err)
@@ -172,7 +173,7 @@ func (c *BaseAdminController) ChangeChainTokenStatus(ctx echo.Context) error {
 func (c *BaseAdminController) DeleteChainToken(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := data.DeleteChainTokenByID(id); err != nil {
 		return c.FailJson(ctx, err)

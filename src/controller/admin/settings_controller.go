@@ -10,6 +10,8 @@ import (
 	"github.com/GMWalletApp/epusdt/model/data"
 	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/telegram"
+	"github.com/GMWalletApp/epusdt/util/constant"
+	"github.com/GMWalletApp/epusdt/util/security"
 	"github.com/labstack/echo/v4"
 )
 
@@ -89,7 +91,7 @@ func (c *BaseAdminController) ListSettings(ctx echo.Context) error {
 // independently so a malformed row in the middle doesn't drop earlier
 // ones. Errors are returned per-key so the UI can surface them.
 // @Summary      Upsert settings
-// @Description  Batch insert/update settings. Returns per-key status.
+// @Description  Batch insert/update settings. Returns per-key status; failed items include error_code for frontend i18n.
 // @Description  Supported groups: brand, rate, system, epay, okpay.
 // @Description  epay group keys: epay.default_token (e.g. "usdt"), epay.default_currency (e.g. "cny"), epay.default_network (e.g. "tron").
 // @Description  okpay group keys: okpay.enabled, okpay.shop_id, okpay.shop_token, okpay.api_url, okpay.callback_url, okpay.return_url, okpay.timeout_seconds, okpay.allow_tokens.
@@ -107,31 +109,36 @@ func (c *BaseAdminController) ListSettings(ctx echo.Context) error {
 func (c *BaseAdminController) UpsertSettings(ctx echo.Context) error {
 	req := new(SettingsUpsertRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := c.ValidateStruct(ctx, req); err != nil {
 		return c.FailJson(ctx, err)
 	}
 	type result struct {
-		Key   string `json:"key"`
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
+		Key       string `json:"key"`
+		OK        bool   `json:"ok"`
+		ErrorCode int    `json:"error_code,omitempty"`
+		Error     string `json:"error,omitempty"`
 	}
 	out := make([]result, 0, len(req.Items))
+	errorResult := func(key string, err error) result {
+		code, msg := constant.ResolveErrno(err)
+		return result{Key: key, OK: false, ErrorCode: code, Error: msg}
+	}
 	for _, item := range req.Items {
 		key := strings.TrimSpace(item.Key)
 		if key == "" {
-			out = append(out, result{Key: item.Key, OK: false, Error: "key required"})
+			out = append(out, errorResult(item.Key, constant.SettingItemErr))
 			continue
 		}
 		value, err := normalizeSettingValue(item.Value)
 		if err != nil {
-			out = append(out, result{Key: key, OK: false, Error: err.Error()})
+			out = append(out, errorResult(key, constant.SettingItemErr))
 			continue
 		}
 		value, err = normalizeAndValidateSettingItem(item.Group, key, value)
 		if err != nil {
-			out = append(out, result{Key: key, OK: false, Error: err.Error()})
+			out = append(out, errorResult(key, constant.SettingItemErr))
 			continue
 		}
 		if key == mdb.SettingKeyAmountPrecision {
@@ -143,7 +150,7 @@ func (c *BaseAdminController) UpsertSettings(ctx echo.Context) error {
 			item.Type = mdb.SettingTypeJSON
 		}
 		if err := data.SetSetting(item.Group, key, value, item.Type); err != nil {
-			out = append(out, result{Key: key, OK: false, Error: err.Error()})
+			out = append(out, errorResult(key, err))
 			continue
 		}
 		out = append(out, result{Key: key, OK: true})
@@ -204,6 +211,13 @@ func normalizeAndValidateSettingItem(group, key, value string) (string, error) {
 			return value, err
 		}
 		return normalized, nil
+	case mdb.SettingKeyRateApiUrl:
+		if strings.ToLower(strings.TrimSpace(group)) != mdb.SettingGroupRate {
+			return value, fmt.Errorf("%s must use group %s", key, mdb.SettingGroupRate)
+		}
+		if err := security.ValidatePublicHTTPURL(value); err != nil {
+			return value, fmt.Errorf("%s invalid: %w", key, err)
+		}
 	}
 	return value, nil
 }

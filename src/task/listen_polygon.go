@@ -65,18 +65,18 @@ func runPolygonListener(contracts []common.Address) {
 		}
 	}()
 
-	wsURL, ok := resolveChainWsURL(mdb.NetworkPolygon, "[POLYGON-WS]")
+	wsNode, ok := resolveChainWsNode(mdb.NetworkPolygon, "[POLYGON-WS]")
 	if !ok {
 		return
 	}
-	log.Sugar.Infof("[POLYGON-WS] connecting to %s watching %d contract(s)", wsURL, len(contracts))
+	log.Sugar.Infof("[POLYGON-WS] connecting using WSS node %s watching %d contract(s)", data.RpcNodeLogLabel(wsNode), len(contracts))
 
 	query := ethereum.FilterQuery{
 		Addresses: contracts,
 		Topics:    [][]common.Hash{},
 	}
 
-	runEvmWsLogListener(ctx, "[POLYGON-WS]", wsURL, query, func(client *ethclient.Client, vLog types.Log) {
+	runEvmWsLogListener(ctx, "[POLYGON-WS]", wsNode, query, func(client *ethclient.Client, vLog types.Log) {
 		if len(vLog.Topics) < 3 {
 			return
 		}

@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GMWalletApp/epusdt/config"
 	"github.com/GMWalletApp/epusdt/model/dao"
 	"github.com/GMWalletApp/epusdt/model/data"
 	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/model/service"
+	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/labstack/echo/v4"
 )
 
@@ -338,8 +340,15 @@ func TestAdminInitPasswordFlow(t *testing.T) {
 	if recFetch2.Code != http.StatusBadRequest {
 		t.Fatalf("second fetch should fail with 400, got %d body=%s", recFetch2.Code, recFetch2.Body.String())
 	}
-	if !strings.Contains(strings.ToLower(recFetch2.Body.String()), "already fetched") {
-		t.Fatalf("expected already fetched error, got: %s", recFetch2.Body.String())
+	var respFetch2 map[string]interface{}
+	if err := json.Unmarshal(recFetch2.Body.Bytes(), &respFetch2); err != nil {
+		t.Fatalf("unmarshal second fetch response: %v", err)
+	}
+	if got := int(respFetch2["status_code"].(float64)); got != 10040 {
+		t.Fatalf("second fetch status_code = %d, want 10040; response=%v", got, respFetch2)
+	}
+	if got, _ := respFetch2["message"].(string); got != constant.Errno[10040] {
+		t.Fatalf("second fetch message = %q, want %q; response=%v", got, constant.Errno[10040], respFetch2)
 	}
 
 	token := adminLogin(t, e, testAdminUsername, initPassword)
@@ -522,14 +531,25 @@ func TestAdminRpcNodes_CRUD(t *testing.T) {
 	if nodeID == nil {
 		t.Fatal("CreateRpcNode missing id")
 	}
+	if got, _ := dataObj["purpose"].(string); got != mdb.RpcNodePurposeGeneral {
+		t.Fatalf("created purpose = %q, want %q", got, mdb.RpcNodePurposeGeneral)
+	}
 	nodeIDStr := fmt.Sprintf("%.0f", nodeID.(float64))
 
 	// Update.
 	rec = doPatchAdmin(e, "/admin/api/v1/rpc-nodes/"+nodeIDStr, map[string]interface{}{
-		"url": "https://eth-mainnet2.example.com",
+		"url":     "https://eth-mainnet2.example.com",
+		"purpose": mdb.RpcNodePurposeManualVerify,
 	}, token)
 	t.Logf("UpdateRpcNode: %s", rec.Body.String())
 	assertOK(t, rec)
+	updatedNode, err := data.GetRpcNodeByID(uint64(nodeID.(float64)))
+	if err != nil {
+		t.Fatalf("reload rpc node: %v", err)
+	}
+	if updatedNode.Purpose != mdb.RpcNodePurposeManualVerify {
+		t.Fatalf("updated purpose = %q, want %q", updatedNode.Purpose, mdb.RpcNodePurposeManualVerify)
+	}
 
 	// Health check — network likely unreachable in test, but route must not 404/500.
 	rec = doPostAdmin(e, "/admin/api/v1/rpc-nodes/"+nodeIDStr+"/health-check", nil, token)
@@ -542,6 +562,95 @@ func TestAdminRpcNodes_CRUD(t *testing.T) {
 	rec = doDeleteAdmin(e, "/admin/api/v1/rpc-nodes/"+nodeIDStr, token)
 	t.Logf("DeleteRpcNode: %s", rec.Body.String())
 	assertOK(t, rec)
+}
+
+func TestAdminRpcNodes_RejectsURLTypeMismatch(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+
+	rec := doPostAdmin(e, "/admin/api/v1/rpc-nodes", map[string]interface{}{
+		"network": "ethereum",
+		"url":     "wss://eth-mainnet.example.com",
+		"type":    mdb.RpcNodeTypeHttp,
+	}, token)
+	t.Logf("CreateRpcNode(http with wss): status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected create mismatch to fail, got 200: %s", rec.Body.String())
+	}
+	assertErrorCode(t, rec, 10022)
+
+	rec = doPostAdmin(e, "/admin/api/v1/rpc-nodes", map[string]interface{}{
+		"network": "ethereum",
+		"url":     "https://eth-mainnet.example.com",
+		"type":    mdb.RpcNodeTypeWs,
+	}, token)
+	t.Logf("CreateRpcNode(ws with https): status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected create mismatch to fail, got 200: %s", rec.Body.String())
+	}
+	assertErrorCode(t, rec, 10023)
+
+	rec = doPostAdmin(e, "/admin/api/v1/rpc-nodes", map[string]interface{}{
+		"network": "ethereum",
+		"url":     "https://eth-mainnet.example.com",
+		"type":    mdb.RpcNodeTypeHttp,
+		"purpose": "invalid-purpose",
+	}, token)
+	t.Logf("CreateRpcNode(invalid purpose): status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected invalid purpose to fail, got 200: %s", rec.Body.String())
+	}
+	assertErrorCode(t, rec, 10020)
+
+	rec = doPostAdmin(e, "/admin/api/v1/rpc-nodes", map[string]interface{}{
+		"network": "ethereum",
+		"url":     "https://eth-mainnet.example.com",
+		"type":    mdb.RpcNodeTypeHttp,
+	}, token)
+	resp := assertOK(t, rec)
+	dataObj, _ := resp["data"].(map[string]interface{})
+	nodeID := uint64(dataObj["id"].(float64))
+	nodeIDStr := fmt.Sprintf("%d", nodeID)
+
+	rec = doPatchAdmin(e, "/admin/api/v1/rpc-nodes/"+nodeIDStr, map[string]interface{}{
+		"url": "wss://eth-mainnet.example.com",
+	}, token)
+	t.Logf("UpdateRpcNode(http with wss): status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected update mismatch to fail, got 200: %s", rec.Body.String())
+	}
+	assertErrorCode(t, rec, 10022)
+
+	node, err := data.GetRpcNodeByID(nodeID)
+	if err != nil {
+		t.Fatalf("reload rpc node: %v", err)
+	}
+	if node.Url != "https://eth-mainnet.example.com" {
+		t.Fatalf("node url changed after rejected update: %q", node.Url)
+	}
+}
+
+func TestAdminPathIDParseErrorUsesParamsErrno(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+
+	rec := doGetAdmin(e, "/admin/api/v1/api-keys/not-a-number/stats", token)
+	assertErrorCode(t, rec, 10009)
+}
+
+func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantCode int) {
+	t.Helper()
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected HTTP 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal error response: %v", err)
+	}
+	if got := int(resp["status_code"].(float64)); got != wantCode {
+		t.Fatalf("status_code = %d, want %d; response=%v", got, wantCode, resp)
+	}
+	if got, _ := resp["message"].(string); got != constant.Errno[wantCode] {
+		t.Fatalf("message = %q, want %q; response=%v", got, constant.Errno[wantCode], resp)
+	}
 }
 
 // ─── Wallets ─────────────────────────────────────────────────────────────────
@@ -692,9 +801,14 @@ func TestAdminOrders_MarkPaidSuccessAfterVerification(t *testing.T) {
 	})
 	defer restore()
 
-	rec := doPostAdmin(e, "/admin/api/v1/orders/"+order.TradeId+"/mark-paid", map[string]interface{}{
+	jsonBytes, _ := json.Marshal(map[string]interface{}{
 		"block_transaction_id": "block-admin-ok",
-	}, token)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/v1/orders/"+order.TradeId+"/mark-paid", strings.NewReader(string(jsonBytes)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
 	t.Logf("MarkOrderPaid success: status=%d body=%s", rec.Code, rec.Body.String())
 	assertOK(t, rec)
 	if !verified {
@@ -874,6 +988,164 @@ func TestAdminDashboard_AllRoutes(t *testing.T) {
 	}
 }
 
+func TestAdminDashboard_RangeStatsIncludeHistoricalOrders(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	yesterday := time.Now().AddDate(0, 0, -1)
+	createdAt := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 10, 0, 0, 0, time.Local)
+	updatedAt := createdAt.Add(5 * time.Minute)
+
+	order := &mdb.Orders{
+		TradeId:        "trade-dashboard-yesterday",
+		OrderId:        "order-dashboard-yesterday",
+		Amount:         100,
+		Currency:       "CNY",
+		ActualAmount:   12.5,
+		ReceiveAddress: "TTestDashboardAddress001",
+		Token:          "USDT",
+		Network:        mdb.NetworkTron,
+		Status:         mdb.StatusPaySuccess,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create historical order: %v", err)
+	}
+	if err := dao.Mdb.Model(order).Updates(map[string]interface{}{
+		"created_at": createdAt,
+		"updated_at": updatedAt,
+	}).Error; err != nil {
+		t.Fatalf("age historical order: %v", err)
+	}
+
+	todayResp := assertOK(t, doGetAdmin(e, "/admin/api/v1/dashboard/order-stats", token))
+	todayData, _ := todayResp["data"].(map[string]interface{})
+	if got, _ := todayData["order_count"].(float64); got != 0 {
+		t.Fatalf("default order-stats order_count = %v, want 0 for today's range", got)
+	}
+
+	statsResp := assertOK(t, doGetAdmin(e, "/admin/api/v1/dashboard/order-stats?range=7d", token))
+	statsData, _ := statsResp["data"].(map[string]interface{})
+	if got, _ := statsData["order_count"].(float64); got != 1 {
+		t.Fatalf("7d order-stats order_count = %v, want 1", got)
+	}
+	if got, _ := statsData["success_count"].(float64); got != 1 {
+		t.Fatalf("7d order-stats success_count = %v, want 1", got)
+	}
+
+	overviewResp := assertOK(t, doGetAdmin(e, "/admin/api/v1/dashboard/overview?range=7d", token))
+	overviewData, _ := overviewResp["data"].(map[string]interface{})
+	if got, _ := overviewData["order_count"].(float64); got != 1 {
+		t.Fatalf("7d overview order_count = %v, want 1", got)
+	}
+	if got, _ := overviewData["volume"].(float64); got != 12.5 {
+		t.Fatalf("7d overview volume = %v, want 12.5", got)
+	}
+
+	for _, path := range []string{
+		"/admin/api/v1/dashboard/asset-trend?range=7d",
+		"/admin/api/v1/dashboard/revenue-trend?range=7d",
+		"/admin/api/v1/dashboard/asset-trend?range=30d",
+		"/admin/api/v1/dashboard/revenue-trend?range=30d",
+	} {
+		resp := assertOK(t, doGetAdmin(e, path, token))
+		rows, _ := resp["data"].([]interface{})
+		day := createdAt.Format("2006-01-02")
+		found := false
+		for _, row := range rows {
+			item, _ := row.(map[string]interface{})
+			if item["day"] != day {
+				continue
+			}
+			found = true
+			if got, _ := item["order_count"].(float64); got != 1 {
+				t.Fatalf("%s order_count for %s = %v, want 1", path, day, got)
+			}
+			if got, _ := item["success_count"].(float64); got != 1 {
+				t.Fatalf("%s success_count for %s = %v, want 1", path, day, got)
+			}
+			if got, _ := item["actual_amount"].(float64); got != 12.5 {
+				t.Fatalf("%s actual_amount for %s = %v, want 12.5", path, day, got)
+			}
+		}
+		if !found {
+			t.Fatalf("%s missing historical bucket %s: %#v", path, day, rows)
+		}
+	}
+
+	addressResp := assertOK(t, doGetAdmin(e, "/admin/api/v1/dashboard/asset-trend?range=7d&group_by=address", token))
+	addressRows, _ := addressResp["data"].([]interface{})
+	day := createdAt.Format("2006-01-02")
+	foundAddress := false
+	for _, row := range addressRows {
+		item, _ := row.(map[string]interface{})
+		if item["day"] != day || item["address"] != order.ReceiveAddress {
+			continue
+		}
+		foundAddress = true
+		if got, _ := item["actual_amount"].(float64); got != 12.5 {
+			t.Fatalf("address trend actual_amount for %s = %v, want 12.5", day, got)
+		}
+	}
+	if !foundAddress {
+		t.Fatalf("address trend missing historical bucket %s/%s: %#v", day, order.ReceiveAddress, addressRows)
+	}
+}
+
+func TestAdminDashboard_TodayTrendUsesHourlyBuckets(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	now := time.Now()
+	createdAt := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, time.Local)
+	updatedAt := createdAt.Add(2 * time.Minute)
+
+	order := &mdb.Orders{
+		TradeId:        "trade-dashboard-today",
+		OrderId:        "order-dashboard-today",
+		Amount:         80,
+		Currency:       "CNY",
+		ActualAmount:   9.75,
+		ReceiveAddress: "TTestDashboardAddressHourly",
+		Token:          "USDT",
+		Network:        mdb.NetworkTron,
+		Status:         mdb.StatusPaySuccess,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create today order: %v", err)
+	}
+	if err := dao.Mdb.Model(order).Updates(map[string]interface{}{
+		"created_at": createdAt,
+		"updated_at": updatedAt,
+	}).Error; err != nil {
+		t.Fatalf("set today order time: %v", err)
+	}
+
+	for _, path := range []string{
+		"/admin/api/v1/dashboard/asset-trend?range=today",
+		"/admin/api/v1/dashboard/revenue-trend?range=today",
+	} {
+		resp := assertOK(t, doGetAdmin(e, path, token))
+		rows, _ := resp["data"].([]interface{})
+		hour := createdAt.Format("2006-01-02 15:00")
+		found := false
+		for _, row := range rows {
+			item, _ := row.(map[string]interface{})
+			if item["day"] != hour {
+				continue
+			}
+			found = true
+			if got, _ := item["order_count"].(float64); got != 1 {
+				t.Fatalf("%s order_count for %s = %v, want 1", path, hour, got)
+			}
+			if got, _ := item["success_count"].(float64); got != 1 {
+				t.Fatalf("%s success_count for %s = %v, want 1", path, hour, got)
+			}
+			if got, _ := item["actual_amount"].(float64); got != 9.75 {
+				t.Fatalf("%s actual_amount for %s = %v, want 9.75", path, hour, got)
+			}
+		}
+		if !found {
+			t.Fatalf("%s missing hourly bucket %s: %#v", path, hour, rows)
+		}
+	}
+}
+
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 // TestAdminSettings_ListAndUpsert verifies listing and upserting settings.
@@ -1035,12 +1307,56 @@ func TestAdminSettings_DeleteNonExistent(t *testing.T) {
 	}
 }
 
+func TestAdminSettings_RejectsPrivateRateAPIURL(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+
+	rec := doPutAdmin(e, "/admin/api/v1/settings", map[string]interface{}{
+		"items": []map[string]interface{}{
+			{"group": "rate", "key": mdb.SettingKeyRateApiUrl, "value": "http://127.0.0.1:8080/", "type": "string"},
+		},
+	}, token)
+	resp := assertOK(t, rec)
+	results, ok := resp["data"].([]interface{})
+	if !ok || len(results) != 1 {
+		t.Fatalf("expected one result, got %T %v", resp["data"], resp["data"])
+	}
+	result, _ := results[0].(map[string]interface{})
+	if result["ok"] != false {
+		t.Fatalf("private rate.api_url result = %v, want ok=false", result)
+	}
+	if got := int(result["error_code"].(float64)); got != 10043 {
+		t.Fatalf("private rate.api_url error_code = %d, want 10043; result=%v", got, result)
+	}
+	if got, _ := result["error"].(string); got != constant.Errno[10043] {
+		t.Fatalf("private rate.api_url error = %q, want %q", got, constant.Errno[10043])
+	}
+}
+
+func TestAdminSettings_AllowsPublicRateAPIURL(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+
+	rec := doPutAdmin(e, "/admin/api/v1/settings", map[string]interface{}{
+		"items": []map[string]interface{}{
+			{"group": "rate", "key": mdb.SettingKeyRateApiUrl, "value": "https://93.184.216.34/rate", "type": "string"},
+		},
+	}, token)
+	resp := assertOK(t, rec)
+	results, ok := resp["data"].([]interface{})
+	if !ok || len(results) != 1 {
+		t.Fatalf("expected one result, got %T %v", resp["data"], resp["data"])
+	}
+	result, _ := results[0].(map[string]interface{})
+	if result["ok"] != true {
+		t.Fatalf("public rate.api_url result = %v, want ok=true", result)
+	}
+}
+
 func TestAdminSettings_DeleteThenReupsertRestoresSetting(t *testing.T) {
 	e, token := setupAdminTestEnv(t)
 
 	rec := doPutAdmin(e, "/admin/api/v1/settings", map[string]interface{}{
 		"items": []map[string]interface{}{
-			{"group": "rate", "key": mdb.SettingKeyRateApiUrl, "value": "https://rate.old.example", "type": "string"},
+			{"group": "rate", "key": mdb.SettingKeyRateApiUrl, "value": "https://93.184.216.34/rate-old", "type": "string"},
 		},
 	}, token)
 	assertOK(t, rec)
@@ -1053,7 +1369,7 @@ func TestAdminSettings_DeleteThenReupsertRestoresSetting(t *testing.T) {
 
 	rec = doPutAdmin(e, "/admin/api/v1/settings", map[string]interface{}{
 		"items": []map[string]interface{}{
-			{"group": "rate", "key": mdb.SettingKeyRateApiUrl, "value": "https://rate.new.example", "type": "string"},
+			{"group": "rate", "key": mdb.SettingKeyRateApiUrl, "value": "https://93.184.216.34/rate-new", "type": "string"},
 		},
 	}, token)
 	assertOK(t, rec)
@@ -1069,7 +1385,7 @@ func TestAdminSettings_DeleteThenReupsertRestoresSetting(t *testing.T) {
 		item, _ := row.(map[string]interface{})
 		if item["key"] == mdb.SettingKeyRateApiUrl {
 			found = true
-			if item["value"] != "https://rate.new.example" {
+			if item["value"] != "https://93.184.216.34/rate-new" {
 				t.Fatalf("rate.api_url value = %v, want new value", item["value"])
 			}
 		}
@@ -1350,7 +1666,7 @@ func TestAdminOrders_ListWithSubExcludesSubOrdersFromTopLevel(t *testing.T) {
 		"currency":     "CNY",
 		"token":        "USDT",
 		"network":      "tron",
-		"notify_url":   "https://merchant.example/callback",
+		"notify_url":   "https://93.184.216.34/callback",
 		"redirect_url": "https://merchant.example/redirect",
 	})
 	rec := doPost(e, "/payments/gmpay/v1/order/create-transaction", parentBody)

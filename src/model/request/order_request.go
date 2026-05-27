@@ -39,9 +39,20 @@ type OrderProcessingRequest struct {
 	BlockTransactionId string
 }
 
+// ManualPaymentRequest 手动提交交易 hash 补单
+type ManualPaymentRequest struct {
+	BlockTransactionId string `json:"block_transaction_id" validate:"required" example:"0xabc123def456..."`
+}
+
+func (r ManualPaymentRequest) Translates() map[string]string {
+	return validate.MS{
+		"BlockTransactionId": "交易哈希",
+	}
+}
+
 // SwitchNetworkRequest 切换支付网络
 type SwitchNetworkRequest struct {
-	TradeId string `json:"trade_id" validate:"required" example:"T2026041612345678"`
+	TradeId string `json:"trade_id" validate:"required" example:"3nQ9pL2xV7sK1mR8cT4yB_aZ"`
 	Token   string `json:"token" validate:"required" example:"USDT"`
 	Network string `json:"network" validate:"required" example:"okpay,tron,solana,ethereum"`
 }

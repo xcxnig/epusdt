@@ -49,16 +49,18 @@ type RotateSecretResponse struct {
 
 // BatchImportResult is one row in the batch import response.
 type BatchImportResult struct {
-	Address string `json:"address" example:"TTestTronAddress001"`
-	OK      bool   `json:"ok" example:"true"`
-	Error   string `json:"error,omitempty" example:""`
+	Address   string `json:"address" example:"TTestTronAddress001"`
+	OK        bool   `json:"ok" example:"true"`
+	ErrorCode int    `json:"error_code,omitempty" example:"10001"`
+	Error     string `json:"error,omitempty" example:"wallet address already exists"`
 }
 
 // SettingsUpsertResult is one row in the settings upsert response.
 type SettingsUpsertResult struct {
-	Key   string `json:"key" example:"rate.api_url"`
-	OK    bool   `json:"ok" example:"true"`
-	Error string `json:"error,omitempty" example:""`
+	Key       string `json:"key" example:"rate.api_url"`
+	OK        bool   `json:"ok" example:"true"`
+	ErrorCode int    `json:"error_code,omitempty" example:"10043"`
+	Error     string `json:"error,omitempty" example:"invalid setting item"`
 }
 
 // Overview returns the top-card numbers for the dashboard landing page.

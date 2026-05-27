@@ -3,12 +3,12 @@ package admin
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"strconv"
 	"strings"
 
 	"github.com/GMWalletApp/epusdt/model/data"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/labstack/echo/v4"
 )
 
@@ -79,7 +79,7 @@ func (c *BaseAdminController) ListApiKeys(ctx echo.Context) error {
 func (c *BaseAdminController) CreateApiKey(ctx echo.Context) error {
 	req := new(CreateApiKeyRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := c.ValidateStruct(ctx, req); err != nil {
 		return c.FailJson(ctx, err)
@@ -150,11 +150,11 @@ func isUniqueViolation(err error) bool {
 func (c *BaseAdminController) UpdateApiKey(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	req := new(UpdateApiKeyRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	fields := map[string]interface{}{}
 	if req.Name != nil {
@@ -187,11 +187,11 @@ func (c *BaseAdminController) UpdateApiKey(ctx echo.Context) error {
 func (c *BaseAdminController) ChangeApiKeyStatus(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	req := new(ChangeApiKeyStatusRequest)
 	if err := ctx.Bind(req); err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := c.ValidateStruct(ctx, req); err != nil {
 		return c.FailJson(ctx, err)
@@ -215,7 +215,7 @@ func (c *BaseAdminController) ChangeApiKeyStatus(ctx echo.Context) error {
 func (c *BaseAdminController) RotateApiKeySecret(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	secret := randomHex(32)
 	if err := data.UpdateApiKeyFields(id, map[string]interface{}{"secret_key": secret}); err != nil {
@@ -239,7 +239,7 @@ func (c *BaseAdminController) RotateApiKeySecret(ctx echo.Context) error {
 func (c *BaseAdminController) DeleteApiKey(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	if err := data.DeleteApiKeyByID(id); err != nil {
 		return c.FailJson(ctx, err)
@@ -262,14 +262,14 @@ func (c *BaseAdminController) DeleteApiKey(ctx echo.Context) error {
 func (c *BaseAdminController) GetApiKeyStats(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	row, err := data.GetApiKeyByID(id)
 	if err != nil {
 		return c.FailJson(ctx, err)
 	}
 	if row.ID == 0 {
-		return c.FailJson(ctx, errors.New("api key not found"))
+		return c.FailJson(ctx, constant.ApiKeyNotFoundErr)
 	}
 	return c.SucJson(ctx, map[string]interface{}{
 		"call_count":   row.CallCount,
@@ -291,14 +291,14 @@ func (c *BaseAdminController) GetApiKeyStats(ctx echo.Context) error {
 func (c *BaseAdminController) GetApiKeySecret(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return c.FailJson(ctx, err)
+		return c.FailJson(ctx, constant.ParamsMarshalErr)
 	}
 	row, err := data.GetApiKeyByID(id)
 	if err != nil {
 		return c.FailJson(ctx, err)
 	}
 	if row.ID == 0 {
-		return c.FailJson(ctx, errors.New("api key not found"))
+		return c.FailJson(ctx, constant.ApiKeyNotFoundErr)
 	}
 	return c.SucJson(ctx, map[string]string{"secret_key": row.SecretKey})
 }

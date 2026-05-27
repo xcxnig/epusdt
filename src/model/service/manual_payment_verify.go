@@ -54,7 +54,9 @@ func SetManualOrderPaymentValidatorForTest(fn func(*mdb.Orders, string) (string,
 	if fn == nil {
 		manualOrderPaymentValidator = validateManualOrderPaymentDefault
 	} else {
-		manualOrderPaymentValidator = fn
+		manualOrderPaymentValidator = func(order *mdb.Orders, blockTransactionID string) (string, error) {
+			return fn(order, blockTransactionID)
+		}
 	}
 	manualOrderPaymentValidatorMu.Unlock()
 	return func() {
@@ -282,25 +284,25 @@ func validateManualEvmPaymentWithClient(ctx context.Context, client evmChainRead
 func dialManualEvmClients(ctx context.Context, network string) ([]manualEvmClient, error) {
 	var clients []manualEvmClient
 	var connectErrors []string
-	for _, nodeType := range []string{mdb.RpcNodeTypeWs, mdb.RpcNodeTypeHttp} {
-		node, err := data.SelectRpcNode(network, nodeType)
-		if err != nil {
-			return nil, err
-		}
-		if node == nil || node.ID == 0 || strings.TrimSpace(node.Url) == "" {
+
+	nodes, err := listManualEvmRpcCandidates(network)
+	if err != nil {
+		return nil, err
+	}
+	for _, node := range nodes {
+		if strings.TrimSpace(node.Url) == "" {
 			continue
 		}
-		rpcURL := strings.TrimSpace(node.Url)
-		client, err := ethclient.DialContext(ctx, rpcURL)
+		client, err := dialManualEvmClient(ctx, node)
 		if err == nil {
 			clients = append(clients, manualEvmClient{
-				label:  fmt.Sprintf("%s %s", nodeType, rpcURL),
+				label:  manualRpcNodeLabel(node),
 				reader: client,
 				close:  client.Close,
 			})
 			continue
 		}
-		connectErrors = append(connectErrors, fmt.Sprintf("%s %s: %v", nodeType, rpcURL, err))
+		connectErrors = append(connectErrors, fmt.Sprintf("%s: %v", manualRpcNodeLabel(node), err))
 	}
 	if len(clients) > 0 {
 		return clients, nil
@@ -309,6 +311,49 @@ func dialManualEvmClients(ctx context.Context, network string) ([]manualEvmClien
 		return nil, fmt.Errorf("connect %s RPC failed: %s", network, strings.Join(connectErrors, "; "))
 	}
 	return nil, fmt.Errorf("no enabled %s WS/HTTP RPC node configured", network)
+}
+
+func listManualEvmRpcCandidates(network string) ([]mdb.RpcNode, error) {
+	buckets := make([][]mdb.RpcNode, 4)
+	for _, nodeType := range []string{mdb.RpcNodeTypeHttp, mdb.RpcNodeTypeWs} {
+		nodes, err := data.ListManualPaymentRpcCandidates(network, nodeType)
+		if err != nil {
+			return nil, err
+		}
+		for _, node := range nodes {
+			node.Purpose = data.NormalizeRpcNodePurpose(node.Purpose)
+			switch node.Purpose {
+			case mdb.RpcNodePurposeGeneral, mdb.RpcNodePurposeBoth:
+				if node.Status == mdb.RpcNodeStatusOk {
+					buckets[0] = append(buckets[0], node)
+				} else {
+					buckets[1] = append(buckets[1], node)
+				}
+			case mdb.RpcNodePurposeManualVerify:
+				if node.Status == mdb.RpcNodeStatusOk {
+					buckets[2] = append(buckets[2], node)
+				} else {
+					buckets[3] = append(buckets[3], node)
+				}
+			}
+		}
+	}
+
+	out := make([]mdb.RpcNode, 0)
+	for _, bucket := range buckets {
+		out = append(out, bucket...)
+	}
+	return out, nil
+}
+
+func dialManualEvmClient(ctx context.Context, node mdb.RpcNode) (*ethclient.Client, error) {
+	rpcURL := strings.TrimSpace(node.Url)
+	return ethclient.DialContext(ctx, rpcURL)
+}
+
+func manualRpcNodeLabel(node mdb.RpcNode) string {
+	purpose := data.NormalizeRpcNodePurpose(node.Purpose)
+	return fmt.Sprintf("%s purpose=%s", data.RpcNodeLogLabel(node), purpose)
 }
 
 func ensureEvmTransactionNotBeforeOrder(blockTime uint64, order *mdb.Orders) error {
@@ -398,55 +443,77 @@ func validateManualTronPayment(order *mdb.Orders, txID string) (string, error) {
 		return "", err
 	}
 
-	baseURL, apiKey, err := ResolveTronNode()
+	nodes, err := data.ListManualPaymentRpcCandidates(mdb.NetworkTron, mdb.RpcNodeTypeHttp)
 	if err != nil {
 		return "", err
 	}
-
-	var tx manualTronTransaction
-	if err = tronPostJSON(baseURL, apiKey, "/wallet/gettransactionbyid", map[string]interface{}{"value": normalizedTxID}, &tx); err != nil {
-		return "", fmt.Errorf("fetch tron transaction: %w", err)
-	}
-	if strings.TrimSpace(tx.TxID) == "" {
-		return "", fmt.Errorf("transaction not found")
-	}
-	if strings.TrimSpace(tx.TxID) != "" && !strings.EqualFold(strings.TrimSpace(tx.TxID), normalizedTxID) {
-		return "", fmt.Errorf("transaction id mismatch")
-	}
-	if len(tx.Ret) > 0 && tx.Ret[0].ContractRet != "" && tx.Ret[0].ContractRet != "SUCCESS" {
-		return "", fmt.Errorf("transaction is not successful: %s", tx.Ret[0].ContractRet)
+	if len(nodes) == 0 {
+		return "", fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkTron, mdb.RpcNodeTypeHttp)
 	}
 
-	var info manualTronTxInfo
-	if err = tronPostJSON(baseURL, apiKey, "/wallet/gettransactioninfobyid", map[string]interface{}{"value": normalizedTxID}, &info); err != nil {
-		return "", fmt.Errorf("fetch tron transaction info: %w", err)
-	}
-	if info.BlockNumber <= 0 {
-		return "", fmt.Errorf("transaction is not confirmed")
-	}
-	if info.Receipt.Result != "" && info.Receipt.Result != "SUCCESS" {
-		return "", fmt.Errorf("transaction is not successful: %s", info.Receipt.Result)
-	}
-	if err = ensureTronConfirmations(baseURL, apiKey, order.Network, info.BlockNumber); err != nil {
-		return "", err
-	}
-	if info.BlockTimeStamp <= 0 {
-		return "", fmt.Errorf("transaction block timestamp missing")
-	}
-	if info.BlockTimeStamp < order.CreatedAt.TimestampMilli() {
-		return "", fmt.Errorf("transaction predates the order")
-	}
-
-	if strings.EqualFold(strings.TrimSpace(order.Token), "TRX") {
-		if err = validateManualTronNativeTransfer(order, &tx); err != nil {
-			return "", err
+	var verifyErrors []string
+	for _, node := range nodes {
+		if strings.TrimSpace(node.Url) == "" {
+			continue
+		}
+		if err = validateManualTronPaymentWithNode(order, normalizedTxID, node); err != nil {
+			verifyErrors = append(verifyErrors, fmt.Sprintf("%s: %v", manualRpcNodeLabel(node), err))
+			continue
 		}
 		return normalizedTxID, nil
 	}
-	if err = validateManualTronTRC20Transfer(order, &tx, &info); err != nil {
-		return "", err
+	if len(verifyErrors) > 0 {
+		return "", fmt.Errorf("manual TRON verification failed: %s", strings.Join(verifyErrors, "; "))
 	}
-	return normalizedTxID, nil
+	return "", fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkTron, mdb.RpcNodeTypeHttp)
+}
+
+func validateManualTronPaymentWithNode(order *mdb.Orders, normalizedTxID string, node mdb.RpcNode) error {
+	baseURL := strings.TrimSpace(node.Url)
+	var tx manualTronTransaction
+	if err := tronPostJSON(baseURL, node.ApiKey, "/wallet/gettransactionbyid", map[string]interface{}{"value": normalizedTxID}, &tx); err != nil {
+		return fmt.Errorf("fetch tron transaction: %w", err)
+	}
+	if strings.TrimSpace(tx.TxID) == "" {
+		return fmt.Errorf("transaction not found")
+	}
+	if strings.TrimSpace(tx.TxID) != "" && !strings.EqualFold(strings.TrimSpace(tx.TxID), normalizedTxID) {
+		return fmt.Errorf("transaction id mismatch")
+	}
+	if len(tx.Ret) > 0 && tx.Ret[0].ContractRet != "" && tx.Ret[0].ContractRet != "SUCCESS" {
+		return fmt.Errorf("transaction is not successful: %s", tx.Ret[0].ContractRet)
+	}
+
+	var info manualTronTxInfo
+	if err := tronPostJSON(baseURL, node.ApiKey, "/wallet/gettransactioninfobyid", map[string]interface{}{"value": normalizedTxID}, &info); err != nil {
+		return fmt.Errorf("fetch tron transaction info: %w", err)
+	}
+	if info.BlockNumber <= 0 {
+		return fmt.Errorf("transaction is not confirmed")
+	}
+	if info.Receipt.Result != "" && info.Receipt.Result != "SUCCESS" {
+		return fmt.Errorf("transaction is not successful: %s", info.Receipt.Result)
+	}
+	if err := ensureTronConfirmations(baseURL, node.ApiKey, order.Network, info.BlockNumber); err != nil {
+		return err
+	}
+	if info.BlockTimeStamp <= 0 {
+		return fmt.Errorf("transaction block timestamp missing")
+	}
+	if info.BlockTimeStamp < order.CreatedAt.TimestampMilli() {
+		return fmt.Errorf("transaction predates the order")
+	}
+
+	if strings.EqualFold(strings.TrimSpace(order.Token), "TRX") {
+		if err := validateManualTronNativeTransfer(order, &tx); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := validateManualTronTRC20Transfer(order, &tx, &info); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateManualTronNativeTransfer(order *mdb.Orders, tx *manualTronTransaction) error {
@@ -571,20 +638,48 @@ func tronPostJSON(baseURL, apiKey, path string, body interface{}, out interface{
 
 func validateManualSolanaPayment(order *mdb.Orders, sig string) (string, error) {
 	sig = strings.TrimSpace(sig)
-	txData, err := SolGetTransaction(sig)
+	nodes, err := data.ListManualPaymentRpcCandidates(mdb.NetworkSolana, mdb.RpcNodeTypeHttp)
 	if err != nil {
-		return "", fmt.Errorf("fetch solana transaction: %w", err)
+		return "", err
+	}
+	if len(nodes) == 0 {
+		return "", fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkSolana, mdb.RpcNodeTypeHttp)
+	}
+
+	var verifyErrors []string
+	for _, node := range nodes {
+		rpcURL := strings.TrimSpace(node.Url)
+		if rpcURL == "" {
+			continue
+		}
+		if err = validateManualSolanaPaymentWithRPC(order, sig, node); err != nil {
+			verifyErrors = append(verifyErrors, fmt.Sprintf("%s: %v", manualRpcNodeLabel(node), err))
+			continue
+		}
+		return sig, nil
+	}
+	if len(verifyErrors) > 0 {
+		return "", fmt.Errorf("manual Solana verification failed: %s", strings.Join(verifyErrors, "; "))
+	}
+	return "", fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkSolana, mdb.RpcNodeTypeHttp)
+}
+
+func validateManualSolanaPaymentWithRPC(order *mdb.Orders, sig string, node mdb.RpcNode) error {
+	rpcURL := strings.TrimSpace(node.Url)
+	txData, err := solGetTransactionWithURL(rpcURL, sig)
+	if err != nil {
+		return fmt.Errorf("fetch solana transaction: %w", err)
 	}
 	if !gjson.GetBytes(txData, "result").Exists() || gjson.GetBytes(txData, "result").Type == gjson.Null {
-		return "", fmt.Errorf("transaction not found")
+		return fmt.Errorf("transaction not found")
 	}
-	if err = ensureSolanaConfirmations(order.Network, sig); err != nil {
-		return "", err
+	if err = ensureSolanaConfirmationsWithRPC(order.Network, sig, rpcURL); err != nil {
+		return err
 	}
 
 	tokens, err := data.ListEnabledChainTokensByNetwork(mdb.NetworkSolana)
 	if err != nil {
-		return "", err
+		return err
 	}
 	mintTokens := make(map[string]*mdb.ChainToken, len(tokens))
 	var nativeSolToken *mdb.ChainToken
@@ -615,17 +710,17 @@ func validateManualSolanaPayment(order *mdb.Orders, sig string) (string, error) 
 			continue
 		}
 		if err = ensureSolanaTransferNotBeforeOrder(transferInfo.BlockTime, order); err != nil {
-			return "", err
+			return err
 		}
 		if amountMatchesFloat(order.ActualAmount, amount) {
-			return sig, nil
+			return nil
 		}
 		amountMismatch = true
 	}
 	if amountMismatch {
-		return "", fmt.Errorf("transaction amount mismatch")
+		return fmt.Errorf("transaction amount mismatch")
 	}
-	return "", fmt.Errorf("matching solana transfer to order address not found")
+	return fmt.Errorf("matching solana transfer to order address not found")
 }
 
 func ensureSolanaTransferNotBeforeOrder(blockTime int64, order *mdb.Orders) error {
@@ -642,6 +737,14 @@ func ensureSolanaTransferNotBeforeOrder(blockTime int64, order *mdb.Orders) erro
 }
 
 func ensureSolanaConfirmations(network, sig string) error {
+	rpcURL, err := resolveSolanaRpcURL()
+	if err != nil {
+		return err
+	}
+	return ensureSolanaConfirmationsWithRPC(network, sig, rpcURL)
+}
+
+func ensureSolanaConfirmationsWithRPC(network, sig string, rpcURL string) error {
 	chain, err := data.GetChainByNetwork(network)
 	if err != nil {
 		return err
@@ -654,7 +757,7 @@ func ensureSolanaConfirmations(network, sig string) error {
 		return nil
 	}
 
-	body, err := SolRetryClient("getSignatureStatuses", []interface{}{
+	body, err := solRetryClientWithURL(rpcURL, "getSignatureStatuses", []interface{}{
 		[]string{sig},
 		map[string]interface{}{"searchTransactionHistory": true},
 	})

@@ -46,6 +46,7 @@ func MdbTableInit() {
 		}
 
 		seedChains()
+		backfillRpcNodePurpose()
 		seedRpcNodes()
 		seedChainTokens()
 		seedDefaultSettings()
@@ -106,14 +107,7 @@ func seedChainTokens() {
 // seedRpcNodes inserts default RPC endpoints for each chain. Checks per
 // (network, url) so re-runs are idempotent and admin edits persist.
 func seedRpcNodes() {
-	defaults := []mdb.RpcNode{
-		{Network: mdb.NetworkTron, Url: "https://api.trongrid.io", Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Status: mdb.RpcNodeStatusUnknown},
-		{Network: mdb.NetworkEthereum, Url: "wss://ethereum.publicnode.com", Type: mdb.RpcNodeTypeWs, Weight: 1, Enabled: true, Status: mdb.RpcNodeStatusUnknown},
-		{Network: mdb.NetworkSolana, Url: "https://api.mainnet-beta.solana.com", Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Status: mdb.RpcNodeStatusUnknown},
-		{Network: mdb.NetworkBsc, Url: "wss://bsc.drpc.org", Type: mdb.RpcNodeTypeWs, Weight: 1, Enabled: true, Status: mdb.RpcNodeStatusUnknown},
-		{Network: mdb.NetworkPolygon, Url: "wss://polygon-bor-rpc.publicnode.com", Type: mdb.RpcNodeTypeWs, Weight: 1, Enabled: true, Status: mdb.RpcNodeStatusUnknown},
-		{Network: mdb.NetworkPlasma, Url: "wss://rpc.plasma.to", Type: mdb.RpcNodeTypeWs, Weight: 1, Enabled: true, Status: mdb.RpcNodeStatusUnknown},
-	}
+	defaults := defaultRpcNodes()
 	for _, d := range defaults {
 		var count int64
 		if err := Mdb.Model(&mdb.RpcNode{}).
@@ -128,6 +122,29 @@ func seedRpcNodes() {
 		if err := Mdb.Create(&d).Error; err != nil {
 			color.Red.Printf("[store_db] seed rpc_nodes err=%s\n", err)
 		}
+	}
+}
+
+func defaultRpcNodes() []mdb.RpcNode {
+	defaults := []mdb.RpcNode{
+		{Network: mdb.NetworkTron, Url: "https://api.trongrid.io", Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusUnknown},
+		{Network: mdb.NetworkEthereum, Url: "wss://ethereum.publicnode.com", Type: mdb.RpcNodeTypeWs, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusUnknown},
+		{Network: mdb.NetworkSolana, Url: "https://api.mainnet-beta.solana.com", Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusUnknown},
+		{Network: mdb.NetworkBsc, Url: "wss://bsc.drpc.org", Type: mdb.RpcNodeTypeWs, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusUnknown},
+		{Network: mdb.NetworkPolygon, Url: "wss://polygon-bor-rpc.publicnode.com", Type: mdb.RpcNodeTypeWs, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusUnknown},
+		{Network: mdb.NetworkPlasma, Url: "wss://rpc.plasma.to", Type: mdb.RpcNodeTypeWs, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusUnknown},
+		{Network: mdb.NetworkEthereum, Url: "https://rpc.epusdt.com/ethereum", Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeManualVerify, Status: mdb.RpcNodeStatusUnknown},
+		{Network: mdb.NetworkBsc, Url: "https://rpc.epusdt.com/binance", Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeManualVerify, Status: mdb.RpcNodeStatusUnknown},
+		{Network: mdb.NetworkPolygon, Url: "https://rpc.epusdt.com/polygon", Type: mdb.RpcNodeTypeHttp, Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeManualVerify, Status: mdb.RpcNodeStatusUnknown},
+	}
+	return defaults
+}
+
+func backfillRpcNodePurpose() {
+	if err := Mdb.Model(&mdb.RpcNode{}).
+		Where("purpose = '' OR purpose IS NULL").
+		Update("purpose", mdb.RpcNodePurposeGeneral).Error; err != nil {
+		color.Red.Printf("[store_db] backfill rpc_nodes purpose err=%s\n", err)
 	}
 }
 

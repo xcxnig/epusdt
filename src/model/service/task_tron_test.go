@@ -51,6 +51,49 @@ func TestResolveTronNode_WithRow(t *testing.T) {
 	}
 }
 
+func TestResolveTronNodeIgnoresManualVerifyOnly(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := dao.Mdb.Create(&mdb.RpcNode{
+		Network: mdb.NetworkTron,
+		Url:     "https://paid-tron.example.com",
+		Type:    mdb.RpcNodeTypeHttp,
+		ApiKey:  "paid-key",
+		Weight:  100,
+		Enabled: true,
+		Purpose: mdb.RpcNodePurposeManualVerify,
+		Status:  mdb.RpcNodeStatusOk,
+	}).Error; err != nil {
+		t.Fatalf("seed manual rpc_node: %v", err)
+	}
+
+	if gotURL, gotKey, err := resolveTronNode(); err == nil {
+		t.Fatalf("resolveTronNode() = (%q, %q, nil), want error", gotURL, gotKey)
+	}
+}
+
+func TestResolveTronNodeUsesGeneralWhenManualVerifyExists(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	rows := []mdb.RpcNode{
+		{Network: mdb.NetworkTron, Url: "https://paid-tron.example.com", Type: mdb.RpcNodeTypeHttp, ApiKey: "paid-key", Weight: 100, Enabled: true, Purpose: mdb.RpcNodePurposeManualVerify, Status: mdb.RpcNodeStatusOk},
+		{Network: mdb.NetworkTron, Url: "https://general-tron.example.com", Type: mdb.RpcNodeTypeHttp, ApiKey: "general-key", Weight: 1, Enabled: true, Purpose: mdb.RpcNodePurposeGeneral, Status: mdb.RpcNodeStatusOk},
+	}
+	if err := dao.Mdb.Create(&rows).Error; err != nil {
+		t.Fatalf("seed rpc_nodes: %v", err)
+	}
+
+	gotURL, gotKey, err := resolveTronNode()
+	if err != nil {
+		t.Fatalf("resolveTronNode(): %v", err)
+	}
+	if gotURL != "https://general-tron.example.com" || gotKey != "general-key" {
+		t.Fatalf("resolveTronNode() = (%q, %q), want general node", gotURL, gotKey)
+	}
+}
+
 // TestResolveTronNode_DisabledRow verifies that a disabled row is ignored.
 func TestResolveTronNode_DisabledRow(t *testing.T) {
 	cleanup := testutil.SetupTestDatabases(t)

@@ -18,18 +18,28 @@ import (
 )
 
 func resolveTronNode() (string, string, error) {
-	node, err := data.SelectRpcNode(mdb.NetworkTron, mdb.RpcNodeTypeHttp)
+	node, err := ResolveTronRpcNode()
 	if err != nil {
 		return "", "", err
 	}
+	rpcURL := strings.TrimRight(strings.TrimSpace(node.Url), "/")
+	return rpcURL, node.ApiKey, nil
+}
+
+func ResolveTronRpcNode(excludeIDs ...uint64) (*mdb.RpcNode, error) {
+	node, err := data.SelectGeneralRpcNode(mdb.NetworkTron, mdb.RpcNodeTypeHttp, excludeIDs...)
+	if err != nil {
+		return nil, err
+	}
 	if node == nil || node.ID == 0 {
-		return "", "", fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkTron, mdb.RpcNodeTypeHttp)
+		return nil, fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkTron, mdb.RpcNodeTypeHttp)
 	}
 	rpcURL := strings.TrimRight(strings.TrimSpace(node.Url), "/")
 	if rpcURL == "" {
-		return "", "", fmt.Errorf("rpc_nodes id=%d has empty url", node.ID)
+		return nil, fmt.Errorf("rpc_nodes id=%d has empty url", node.ID)
 	}
-	return rpcURL, node.ApiKey, nil
+	node.Url = rpcURL
+	return node, nil
 }
 
 func ResolveTronNode() (string, string, error) {

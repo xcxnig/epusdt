@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/GMWalletApp/epusdt/util/page"
 	"github.com/labstack/echo/v4"
@@ -65,13 +66,12 @@ func (r *Resp) SucJsonPage(e echo.Context, data interface{}, pagination page.Pag
 func (r *Resp) FailJson(e echo.Context, err error) error {
 	rr := new(Response)
 	httpStatus := http.StatusBadRequest
-	switch t := err.(type) {
-	case *constant.RspError:
-		rr.StatusCode, rr.Message = t.Render()
-		httpStatus = t.HttpStatus()
-	default:
-		rr.StatusCode = http.StatusBadRequest
-		rr.Message = err.Error()
+	var rspErr *constant.RspError
+	if errors.As(err, &rspErr) {
+		rr.StatusCode, rr.Message = rspErr.Render()
+		httpStatus = rspErr.HttpStatus()
+	} else {
+		rr.StatusCode, rr.Message = constant.ResolveErrno(err)
 	}
 	rr.RequestID = e.Request().Header.Get(echo.HeaderXRequestID)
 	return r.Json(e, httpStatus, &rr)

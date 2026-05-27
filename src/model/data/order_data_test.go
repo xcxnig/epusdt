@@ -42,6 +42,56 @@ func TestEvmTransactionLockAddressIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestStatsBucketExprForDialect(t *testing.T) {
+	tests := []struct {
+		name    string
+		dialect string
+		hourly  bool
+		want    string
+	}{
+		{
+			name:    "sqlite daily",
+			dialect: "sqlite",
+			want:    "substr(created_at, 1, 10)",
+		},
+		{
+			name:    "sqlite hourly",
+			dialect: "sqlite",
+			hourly:  true,
+			want:    "replace(substr(created_at, 1, 13), 'T', ' ') || ':00'",
+		},
+		{
+			name:    "postgres daily",
+			dialect: "postgres",
+			want:    "TO_CHAR(created_at, 'YYYY-MM-DD')",
+		},
+		{
+			name:    "postgres hourly",
+			dialect: "postgres",
+			hourly:  true,
+			want:    "TO_CHAR(created_at, 'YYYY-MM-DD HH24:00')",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := statsBucketExprForDialect(tt.dialect, "created_at", tt.hourly)
+			if err != nil {
+				t.Fatalf("statsBucketExprForDialect error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("bucket expr = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStatsBucketExprRejectsUnsupportedDialect(t *testing.T) {
+	if _, err := statsBucketExprForDialect("mysql", "created_at", false); err == nil {
+		t.Fatal("expected unsupported mysql dialect error")
+	}
+}
+
 func TestTransactionLockPrecisionPreventsEquivalentAmountsOnly(t *testing.T) {
 	cleanup := testutil.SetupTestDatabases(t)
 	defer cleanup()

@@ -337,6 +337,8 @@ func processBlock(block *Block, tokenMap map[string]mdb.ChainToken) {
 type Scanner struct {
 	baseURL   string
 	apiKey    string
+	nodeID    uint64
+	nodeLabel string
 	lastBlock int64
 	// 统计
 	totalBlocks   int64
@@ -349,21 +351,28 @@ func NewScanner() *Scanner {
 }
 
 func (s *Scanner) Init() error {
-	baseURL, apiKey, err := service.ResolveTronNode()
+	node, err := service.ResolveTronRpcNode()
 	if err != nil {
 		return fmt.Errorf("resolve tron node: %w", err)
 	}
-	s.baseURL = baseURL
-	s.apiKey = apiKey
+	s.useRpcNode(node)
 
-	log.Sugar.Infof("[TRON-BLOCK] node=%s", s.baseURL)
+	log.Sugar.Infof("[TRON-BLOCK] using RPC node %s", s.nodeLabel)
 	block, err := GetNowBlock(s.baseURL, s.apiKey)
 	if err != nil {
+		s.recordRpcFailure("initial get latest block")
 		return fmt.Errorf("获取初始块失败: %w", err)
 	}
 	s.lastBlock = block.BlockHeader.RawData.Number
 	log.Sugar.Infof("[TRON-BLOCK] start block=%d", s.lastBlock)
 	return nil
+}
+
+func (s *Scanner) useRpcNode(node *mdb.RpcNode) {
+	s.baseURL = strings.TrimRight(strings.TrimSpace(node.Url), "/")
+	s.apiKey = node.ApiKey
+	s.nodeID = node.ID
+	s.nodeLabel = data.RpcNodeLogLabel(*node)
 }
 
 func (s *Scanner) Run() {
@@ -388,14 +397,17 @@ func (s *Scanner) poll() {
 	latest, err := GetNowBlock(s.baseURL, s.apiKey)
 	if err != nil {
 		log.Sugar.Warnf("[TRON-BLOCK] get latest block: %v", err)
+		s.recordRpcFailure("get latest block")
 		return
 	}
 	latestNum := latest.BlockHeader.RawData.Number
 	if latestNum <= s.lastBlock {
+		data.RecordRpcNodeSuccess(s.nodeID)
 		return
 	}
 
 	tokenMap := loadTronTRC20TokenMap()
+	hadBlockFetchError := false
 	for num := s.lastBlock + 1; num <= latestNum; num++ {
 		var block *Block
 		if num == latestNum {
@@ -404,7 +416,8 @@ func (s *Scanner) poll() {
 			block, err = GetBlockByNum(s.baseURL, s.apiKey, num)
 			if err != nil {
 				log.Sugar.Warnf("[TRON-BLOCK] get block %d: %v", num, err)
-				continue
+				hadBlockFetchError = true
+				break
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
@@ -420,6 +433,29 @@ func (s *Scanner) poll() {
 			}
 		}
 	}
+	if hadBlockFetchError {
+		s.recordRpcFailure("get historical block")
+		return
+	}
+	data.RecordRpcNodeSuccess(s.nodeID)
+}
+
+func (s *Scanner) recordRpcFailure(reason string) {
+	failures, cooling := data.RecordRpcNodeFailure(s.nodeID)
+	if !cooling {
+		log.Sugar.Warnf("[TRON-BLOCK] RPC node failed (%s), node=%s failures=%d/%d", reason, s.nodeLabel, failures, data.RpcFailoverThreshold)
+		return
+	}
+
+	log.Sugar.Warnf("[TRON-BLOCK] RPC node reached fail threshold (%s), node=%s, trying another node", reason, s.nodeLabel)
+	node, err := service.ResolveTronRpcNode(s.nodeID)
+	if err != nil {
+		log.Sugar.Warnf("[TRON-BLOCK] no alternate RPC node available after failure, keep current node=%s: %v", s.nodeLabel, err)
+		return
+	}
+	oldLabel := s.nodeLabel
+	s.useRpcNode(node)
+	log.Sugar.Warnf("[TRON-BLOCK] switched RPC node from %s to %s", oldLabel, s.nodeLabel)
 }
 
 func StartTronBlockScannerListener() {

@@ -17,6 +17,8 @@ import (
 	"github.com/GMWalletApp/epusdt/model/dao"
 	"github.com/GMWalletApp/epusdt/model/data"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/model/service"
+	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/GMWalletApp/epusdt/util/http_client"
 	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/GMWalletApp/epusdt/util/sign"
@@ -240,7 +242,7 @@ func TestCreateOrderGmpayV1Solana(t *testing.T) {
 		"token":      "usdt",
 		"currency":   "cny",
 		"network":    "solana",
-		"notify_url": "http://localhost/notify",
+		"notify_url": "https://93.184.216.34/notify",
 	})
 
 	rec := doPost(e, "/payments/gmpay/v1/order/create-transaction", body)
@@ -269,6 +271,57 @@ func TestCreateOrderGmpayV1Solana(t *testing.T) {
 	t.Logf("Order created: trade_id=%v address=%v amount=%v", data["trade_id"], data["receive_address"], data["actual_amount"])
 }
 
+func TestCreateOrderGmpayRejectsPrivateNotifyURL(t *testing.T) {
+	e := setupTestEnv(t)
+
+	body := signBody(map[string]interface{}{
+		"order_id":   "test-private-notify-001",
+		"amount":     1.00,
+		"token":      "usdt",
+		"currency":   "cny",
+		"network":    "solana",
+		"notify_url": "http://127.0.0.1/notify",
+	})
+
+	rec := doPost(e, "/payments/gmpay/v1/order/create-transaction", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal private notify response: %v", err)
+	}
+	if got := int(resp["status_code"].(float64)); got != 10041 {
+		t.Fatalf("status_code = %d, want 10041; response=%v", got, resp)
+	}
+	if got, _ := resp["message"].(string); got != constant.Errno[10041] {
+		t.Fatalf("message = %q, want %q", got, constant.Errno[10041])
+	}
+}
+
+func TestPublicJSONBindErrorUsesParamsErrno(t *testing.T) {
+	e := setupTestEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/pay/submit-tx-hash/bad-json-order", strings.NewReader("{"))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal bind error response: %v", err)
+	}
+	if got := int(resp["status_code"].(float64)); got != 10009 {
+		t.Fatalf("status_code = %d, want 10009; response=%v", got, resp)
+	}
+	if got, _ := resp["message"].(string); got != constant.Errno[10009] {
+		t.Fatalf("message = %q, want %q", got, constant.Errno[10009])
+	}
+}
+
 // TestCreateOrderGmpayV1SolNative tests creating an order for native SOL token.
 func TestCreateOrderGmpayV1SolNative(t *testing.T) {
 	e := setupTestEnv(t)
@@ -279,7 +332,7 @@ func TestCreateOrderGmpayV1SolNative(t *testing.T) {
 		"token":      "sol",
 		"currency":   "usd",
 		"network":    "solana",
-		"notify_url": "http://localhost/notify",
+		"notify_url": "https://93.184.216.34/notify",
 	})
 
 	rec := doPost(e, "/payments/gmpay/v1/order/create-transaction", body)
@@ -334,7 +387,7 @@ func TestCreateOrderGmpayV1FormData(t *testing.T) {
 		"token":      {"usdt"},
 		"currency":   {"cny"},
 		"network":    {"solana"},
-		"notify_url": {"http://localhost/notify"},
+		"notify_url": {"https://93.184.216.34/notify"},
 	})
 
 	rec := doFormPost(e, "/payments/gmpay/v1/order/create-transaction", values)
@@ -688,7 +741,7 @@ func seedOkPayNotifyFixture(t *testing.T) *okPayNotifyFixture {
 		Token:          "USDT",
 		Network:        mdb.NetworkTron,
 		Status:         mdb.StatusWaitPay,
-		NotifyUrl:      "http://localhost/notify",
+		NotifyUrl:      "https://93.184.216.34/notify",
 		PaymentType:    mdb.PaymentTypeEpay,
 		PayProvider:    mdb.PaymentProviderOnChain,
 	}
@@ -928,7 +981,7 @@ func TestCreateOrderNetworkIsolation(t *testing.T) {
 		"token":      "usdt",
 		"currency":   "cny",
 		"network":    "solana",
-		"notify_url": "http://localhost/notify",
+		"notify_url": "https://93.184.216.34/notify",
 	})
 	rec := doPost(e, "/payments/gmpay/v1/order/create-transaction", body)
 
@@ -956,7 +1009,7 @@ func TestEpaySubmitPhpGetCompatible(t *testing.T) {
 		"type":         {"alipay"},
 		"money":        {"1.00"},
 		"out_trade_no": {"epay-get-001"},
-		"notify_url":   {"http://localhost/notify"},
+		"notify_url":   {"https://93.184.216.34/notify"},
 		"return_url":   {"http://localhost/return"},
 	})
 
@@ -981,7 +1034,7 @@ func TestEpaySubmitPhpPostFormCompatible(t *testing.T) {
 		"type":         {"alipay"},
 		"money":        {"1.00"},
 		"out_trade_no": {"epay-post-001"},
-		"notify_url":   {"http://localhost/notify"},
+		"notify_url":   {"https://93.184.216.34/notify"},
 		"return_url":   {"http://localhost/return"},
 		"sitename":     {"example-shop"},
 	})
@@ -1062,6 +1115,237 @@ func TestCheckStatus_WithOrder(t *testing.T) {
 				t.Fatalf("status = %d, want %d", got, tc.status)
 			}
 		})
+	}
+}
+
+func TestSubmitTxHash_SuccessUpdatesCheckStatus(t *testing.T) {
+	e := setupTestEnv(t)
+	tradeID := createCheckoutCounterRespTestOrder(t, e, "submit-tx-hash-ok-001")
+
+	verified := false
+	restore := service.SetManualOrderPaymentValidatorForTest(func(order *mdb.Orders, blockID string) (string, error) {
+		verified = true
+		if order.TradeId != tradeID {
+			t.Fatalf("validator trade_id = %s, want %s", order.TradeId, tradeID)
+		}
+		if blockID != "user-submitted-hash" {
+			t.Fatalf("validator block id = %s, want user-submitted-hash", blockID)
+		}
+		return "canonical-user-submitted-hash", nil
+	})
+	defer restore()
+
+	jsonBytes, _ := json.Marshal(map[string]interface{}{
+		"block_transaction_id": " user-submitted-hash ",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/pay/submit-tx-hash/"+tradeID, strings.NewReader(string(jsonBytes)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	t.Logf("SubmitTxHash(success): status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !verified {
+		t.Fatal("expected chain verifier to be called")
+	}
+
+	var submitResp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &submitResp); err != nil {
+		t.Fatalf("unmarshal submit response: %v", err)
+	}
+	submitData, ok := submitResp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected data in submit response, got: %v", submitResp)
+	}
+	if got, _ := submitData["block_transaction_id"].(string); got != "canonical-user-submitted-hash" {
+		t.Fatalf("block_transaction_id = %q", got)
+	}
+	if got := int(submitData["status"].(float64)); got != mdb.StatusPaySuccess {
+		t.Fatalf("submit response status = %d, want %d", got, mdb.StatusPaySuccess)
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/pay/check-status/"+tradeID, nil)
+	statusRec := httptest.NewRecorder()
+	e.ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("check-status expected 200, got %d: %s", statusRec.Code, statusRec.Body.String())
+	}
+	var statusResp map[string]interface{}
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusResp); err != nil {
+		t.Fatalf("unmarshal check-status response: %v", err)
+	}
+	statusData, ok := statusResp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected data in check-status response, got: %v", statusResp)
+	}
+	if got := int(statusData["status"].(float64)); got != mdb.StatusPaySuccess {
+		t.Fatalf("check-status status = %d, want %d", got, mdb.StatusPaySuccess)
+	}
+}
+
+func TestSubmitTxHash_VerificationFailureAllowsRetrySameHash(t *testing.T) {
+	e := setupTestEnv(t)
+	tradeID := createCheckoutCounterRespTestOrder(t, e, "submit-tx-hash-retry-001")
+
+	calls := 0
+	restore := service.SetManualOrderPaymentValidatorForTest(func(order *mdb.Orders, blockID string) (string, error) {
+		calls++
+		if order.TradeId != tradeID {
+			t.Fatalf("validator trade_id = %s, want %s", order.TradeId, tradeID)
+		}
+		if blockID != "retry-hash" {
+			t.Fatalf("validator block id = %s, want retry-hash", blockID)
+		}
+		if calls == 1 {
+			return "", fmt.Errorf("rpc verification failed")
+		}
+		return "canonical-retry-hash", nil
+	})
+	defer restore()
+
+	rec := doPost(e, "/pay/submit-tx-hash/"+tradeID, map[string]interface{}{
+		"block_transaction_id": "retry-hash",
+	})
+	t.Logf("SubmitTxHash(verification failure): status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var failResp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &failResp); err != nil {
+		t.Fatalf("unmarshal failure response: %v", err)
+	}
+	if got := int(failResp["status_code"].(float64)); got != 10038 {
+		t.Fatalf("failure status_code = %d, want 10038", got)
+	}
+	if got, _ := failResp["message"].(string); got != constant.Errno[10038] {
+		t.Fatalf("failure message = %q, want %q", got, constant.Errno[10038])
+	}
+
+	reloaded, err := data.GetOrderInfoByTradeId(tradeID)
+	if err != nil {
+		t.Fatalf("reload order after failure: %v", err)
+	}
+	if reloaded.Status != mdb.StatusWaitPay || reloaded.BlockTransactionId != "" {
+		t.Fatalf("order changed after failed submit: status=%d block=%q", reloaded.Status, reloaded.BlockTransactionId)
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/pay/check-status/"+tradeID, nil)
+	statusRec := httptest.NewRecorder()
+	e.ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("check-status expected 200, got %d: %s", statusRec.Code, statusRec.Body.String())
+	}
+	var statusResp map[string]interface{}
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusResp); err != nil {
+		t.Fatalf("unmarshal check-status response: %v", err)
+	}
+	statusData := statusResp["data"].(map[string]interface{})
+	if got := int(statusData["status"].(float64)); got != mdb.StatusWaitPay {
+		t.Fatalf("check-status status after failed submit = %d, want %d", got, mdb.StatusWaitPay)
+	}
+
+	retryRec := doPost(e, "/pay/submit-tx-hash/"+tradeID, map[string]interface{}{
+		"block_transaction_id": "retry-hash",
+	})
+	t.Logf("SubmitTxHash(retry same hash): status=%d body=%s", retryRec.Code, retryRec.Body.String())
+	if retryRec.Code != http.StatusOK {
+		t.Fatalf("expected retry success, got %d: %s", retryRec.Code, retryRec.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("validator calls = %d, want 2", calls)
+	}
+	reloaded, err = data.GetOrderInfoByTradeId(tradeID)
+	if err != nil {
+		t.Fatalf("reload order after retry: %v", err)
+	}
+	if reloaded.Status != mdb.StatusPaySuccess || reloaded.BlockTransactionId != "canonical-retry-hash" {
+		t.Fatalf("order after retry: status=%d block=%q", reloaded.Status, reloaded.BlockTransactionId)
+	}
+}
+
+func TestSubmitTxHash_RejectsOkPayOrder(t *testing.T) {
+	e := setupTestEnv(t)
+	order := &mdb.Orders{
+		TradeId:        "trade-submit-tx-hash-okpay",
+		OrderId:        "order-submit-tx-hash-okpay",
+		Amount:         10,
+		Currency:       "CNY",
+		ActualAmount:   1.23,
+		ReceiveAddress: "OKPAY",
+		Token:          "USDT",
+		Network:        mdb.NetworkTron,
+		Status:         mdb.StatusWaitPay,
+		NotifyUrl:      "https://merchant.example/notify",
+		PayProvider:    mdb.PaymentProviderOkPay,
+	}
+	if err := dao.Mdb.Create(order).Error; err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+
+	called := false
+	restore := service.SetManualOrderPaymentValidatorForTest(func(*mdb.Orders, string) (string, error) {
+		called = true
+		return "canonical-okpay-hash", nil
+	})
+	defer restore()
+
+	rec := doPost(e, "/pay/submit-tx-hash/"+order.TradeId, map[string]interface{}{
+		"block_transaction_id": "okpay-hash",
+	})
+	t.Logf("SubmitTxHash(okpay): status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected failure, got 200: %s", rec.Body.String())
+	}
+	if called {
+		t.Fatal("verifier should not run for OkPay/provider orders")
+	}
+
+	reloaded, err := data.GetOrderInfoByTradeId(order.TradeId)
+	if err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if reloaded.Status != mdb.StatusWaitPay || reloaded.BlockTransactionId != "" {
+		t.Fatalf("order changed after rejected submit: status=%d block=%q", reloaded.Status, reloaded.BlockTransactionId)
+	}
+}
+
+func TestSubmitTxHash_RejectsExistingHashBeforeRpc(t *testing.T) {
+	e := setupTestEnv(t)
+	existing := &mdb.Orders{
+		TradeId:            "trade-submit-tx-hash-existing",
+		OrderId:            "order-submit-tx-hash-existing",
+		BlockTransactionId: "existing-hash",
+		Amount:             10,
+		Currency:           "CNY",
+		ActualAmount:       1.23,
+		ReceiveAddress:     "TTestTronAddress001",
+		Token:              "USDT",
+		Network:            mdb.NetworkTron,
+		Status:             mdb.StatusPaySuccess,
+		PayProvider:        mdb.PaymentProviderOnChain,
+	}
+	if err := dao.Mdb.Create(existing).Error; err != nil {
+		t.Fatalf("create existing paid order: %v", err)
+	}
+	tradeID := createCheckoutCounterRespTestOrder(t, e, "submit-tx-hash-existing-001")
+
+	called := false
+	restore := service.SetManualOrderPaymentValidatorForTest(func(*mdb.Orders, string) (string, error) {
+		called = true
+		return "existing-hash", nil
+	})
+	defer restore()
+
+	rec := doPost(e, "/pay/submit-tx-hash/"+tradeID, map[string]interface{}{
+		"block_transaction_id": "existing-hash",
+	})
+	t.Logf("SubmitTxHash(existing hash): status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected failure, got 200: %s", rec.Body.String())
+	}
+	if called {
+		t.Fatal("verifier should not run when hash already exists")
 	}
 }
 
@@ -1162,7 +1446,7 @@ func createCheckoutCounterRespTestOrder(t *testing.T, e *echo.Echo, orderID stri
 		"token":        "usdt",
 		"currency":     "cny",
 		"network":      "tron",
-		"notify_url":   "http://localhost/notify",
+		"notify_url":   "https://93.184.216.34/notify",
 		"redirect_url": "https://merchant.example/return",
 	})
 	rec := doPost(e, "/payments/gmpay/v1/order/create-transaction", body)
@@ -1252,7 +1536,7 @@ func TestSwitchNetwork_WithOrder(t *testing.T) {
 		"token":      "usdt",
 		"currency":   "cny",
 		"network":    "solana",
-		"notify_url": "http://localhost/notify",
+		"notify_url": "https://93.184.216.34/notify",
 	})
 	createRec := doPost(e, "/payments/gmpay/v1/order/create-transaction", createBody)
 	if createRec.Code != http.StatusOK {
@@ -1344,7 +1628,7 @@ func TestSwitchNetwork_OkPayCreatesProviderSubOrder(t *testing.T) {
 		"token":      "usdt",
 		"currency":   "cny",
 		"network":    "solana",
-		"notify_url": "http://localhost/notify",
+		"notify_url": "https://93.184.216.34/notify",
 	})
 	createRec := doPost(e, "/payments/gmpay/v1/order/create-transaction", createBody)
 	if createRec.Code != http.StatusOK {
@@ -1441,7 +1725,7 @@ func TestSwitchNetwork_OkPayIntegration(t *testing.T) {
 		"token":      "usdt",
 		"currency":   "cny",
 		"network":    "solana",
-		"notify_url": "http://localhost/notify",
+		"notify_url": "https://93.184.216.34/notify",
 	})
 	createRec := doPost(e, "/payments/gmpay/v1/order/create-transaction", createBody)
 	if createRec.Code != http.StatusOK {

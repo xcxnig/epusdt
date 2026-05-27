@@ -1,6 +1,7 @@
 package data
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/GMWalletApp/epusdt/model/dao"
@@ -28,25 +29,40 @@ type AddressDailyStat struct {
 	ActualAmount float64 `json:"actual_amount"`
 }
 
+func statsBucketExpr(column string, hourly bool) (string, error) {
+	dialect := "sqlite"
+	if dao.Mdb != nil && dao.Mdb.Dialector != nil {
+		dialect = dao.Mdb.Dialector.Name()
+	}
+	return statsBucketExprForDialect(dialect, column, hourly)
+}
+
+func statsBucketExprForDialect(dialect, column string, hourly bool) (string, error) {
+	switch dialect {
+	case "sqlite", "":
+		// modernc SQLite stores time.Time as Go's time.String() by default.
+		// Prefix buckets work for that format and SQLite datetime text.
+		if hourly {
+			return fmt.Sprintf("replace(substr(%s, 1, 13), 'T', ' ') || ':00'", column), nil
+		}
+		return fmt.Sprintf("substr(%s, 1, 10)", column), nil
+	case "postgres":
+		if hourly {
+			return fmt.Sprintf("TO_CHAR(%s, 'YYYY-MM-DD HH24:00')", column), nil
+		}
+		return fmt.Sprintf("TO_CHAR(%s, 'YYYY-MM-DD')", column), nil
+	default:
+		return "", fmt.Errorf("unsupported database dialect for dashboard stats: %s", dialect)
+	}
+}
+
 // DailyOrderStats returns per-day counts/amounts within [start, end],
 // zero-filling any days in the range that have no orders.
 // Only orders in StatusPaySuccess contribute to Amount sums — that's
 // what the user means by "流水". Pending orders count toward OrderCount
 // to keep成交率 computable.
 func DailyOrderStats(start, end time.Time) ([]DailyStat, error) {
-	var rows []DailyStat
-	err := dao.Mdb.Model(&mdb.Orders{}).
-		Select(`DATE(created_at) AS day,
-            COUNT(*) AS order_count,
-            SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS success_count,
-            SUM(CASE WHEN status = ? THEN amount ELSE 0 END) AS total_amount,
-            SUM(CASE WHEN status = ? THEN actual_amount ELSE 0 END) AS actual_amount`,
-			mdb.StatusPaySuccess, mdb.StatusPaySuccess, mdb.StatusPaySuccess).
-		Where("created_at >= ?", start).
-		Where("created_at <= ?", end).
-		Group("DATE(created_at)").
-		Order("day ASC").
-		Scan(&rows).Error
+	rows, err := queryOrderStats(start, end, false)
 	if err != nil {
 		return nil, err
 	}
@@ -56,23 +72,32 @@ func DailyOrderStats(start, end time.Time) ([]DailyStat, error) {
 // HourlyOrderStats returns per-hour counts/amounts within [start, end],
 // zero-filling any hours that have no orders.
 func HourlyOrderStats(start, end time.Time) ([]DailyStat, error) {
-	var rows []DailyStat
-	err := dao.Mdb.Model(&mdb.Orders{}).
-		Select(`strftime('%Y-%m-%d %H:00', created_at) AS day,
-            COUNT(*) AS order_count,
-            SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS success_count,
-            SUM(CASE WHEN status = ? THEN amount ELSE 0 END) AS total_amount,
-            SUM(CASE WHEN status = ? THEN actual_amount ELSE 0 END) AS actual_amount`,
-			mdb.StatusPaySuccess, mdb.StatusPaySuccess, mdb.StatusPaySuccess).
-		Where("created_at >= ?", start).
-		Where("created_at <= ?", end).
-		Group("strftime('%Y-%m-%d %H:00', created_at)").
-		Order("day ASC").
-		Scan(&rows).Error
+	rows, err := queryOrderStats(start, end, true)
 	if err != nil {
 		return nil, err
 	}
 	return fillHourlyStats(start, end, rows), nil
+}
+
+func queryOrderStats(start, end time.Time, hourly bool) ([]DailyStat, error) {
+	var rows []DailyStat
+	bucket, err := statsBucketExpr("created_at", hourly)
+	if err != nil {
+		return nil, err
+	}
+	err = dao.Mdb.Model(&mdb.Orders{}).
+		Select(fmt.Sprintf(`%s AS day,
+            COUNT(*) AS order_count,
+            SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS success_count,
+            SUM(CASE WHEN status = ? THEN amount ELSE 0 END) AS total_amount,
+            SUM(CASE WHEN status = ? THEN actual_amount ELSE 0 END) AS actual_amount`, bucket),
+			mdb.StatusPaySuccess, mdb.StatusPaySuccess, mdb.StatusPaySuccess).
+		Where("created_at >= ?", start).
+		Where("created_at <= ?", end).
+		Group(bucket).
+		Order("day ASC").
+		Scan(&rows).Error
+	return rows, err
 }
 
 // fillDailyStats generates a zero-filled slice covering every calendar
@@ -122,15 +147,7 @@ func fillHourlyStats(start, end time.Time, rows []DailyStat) []DailyStat {
 // DailyAssetByAddress groups paid actual_amount by (day, receive_address)
 // for the per-address stacked chart, zero-filling missing days.
 func DailyAssetByAddress(start, end time.Time) ([]AddressDailyStat, error) {
-	var rows []AddressDailyStat
-	err := dao.Mdb.Model(&mdb.Orders{}).
-		Select("DATE(created_at) AS day, receive_address AS address, SUM(actual_amount) AS actual_amount").
-		Where("status = ?", mdb.StatusPaySuccess).
-		Where("created_at >= ?", start).
-		Where("created_at <= ?", end).
-		Group("DATE(created_at), receive_address").
-		Order("day ASC").
-		Scan(&rows).Error
+	rows, err := queryAssetByAddress(start, end, false)
 	if err != nil {
 		return nil, err
 	}
@@ -140,19 +157,31 @@ func DailyAssetByAddress(start, end time.Time) ([]AddressDailyStat, error) {
 // HourlyAssetByAddress groups paid actual_amount by (hour, receive_address)
 // for the per-address stacked chart, zero-filling missing hours.
 func HourlyAssetByAddress(start, end time.Time) ([]AddressDailyStat, error) {
-	var rows []AddressDailyStat
-	err := dao.Mdb.Model(&mdb.Orders{}).
-		Select("strftime('%Y-%m-%d %H:00', created_at) AS day, receive_address AS address, SUM(actual_amount) AS actual_amount").
-		Where("status = ?", mdb.StatusPaySuccess).
-		Where("created_at >= ?", start).
-		Where("created_at <= ?", end).
-		Group("strftime('%Y-%m-%d %H:00', created_at), receive_address").
-		Order("day ASC").
-		Scan(&rows).Error
+	rows, err := queryAssetByAddress(start, end, true)
 	if err != nil {
 		return nil, err
 	}
 	return fillAddressHourlyStats(start, end, rows), nil
+}
+
+func queryAssetByAddress(start, end time.Time, hourly bool) ([]AddressDailyStat, error) {
+	var rows []AddressDailyStat
+	bucket, err := statsBucketExpr("created_at", hourly)
+	if err != nil {
+		return nil, err
+	}
+	err = dao.Mdb.Model(&mdb.Orders{}).
+		Select(fmt.Sprintf(`%s AS day,
+            receive_address AS address,
+            SUM(actual_amount) AS actual_amount`, bucket)).
+		Where("status = ?", mdb.StatusPaySuccess).
+		Where("created_at >= ?", start).
+		Where("created_at <= ?", end).
+		Group(bucket).
+		Group("receive_address").
+		Order("day ASC, address ASC").
+		Scan(&rows).Error
+	return rows, err
 }
 
 // fillAddressDailyStats zero-fills missing day×address combinations.

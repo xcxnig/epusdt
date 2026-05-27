@@ -14,9 +14,9 @@ import (
 
 const rpcProbeTimeout = 5 * time.Second
 
-// RpcHealthJob periodically probes every enabled rpc_nodes row and
-// writes status/last_latency_ms. Results drive SelectRpcNode weighted
-// picking at runtime.
+// RpcHealthJob periodically probes enabled general/both rpc_nodes rows.
+// Manual verification nodes are left for on-demand admin checks so paid
+// endpoints are not consumed by the scheduler.
 type RpcHealthJob struct{}
 
 var gRpcHealthJobLock sync.Mutex
@@ -25,7 +25,7 @@ func (r RpcHealthJob) Run() {
 	gRpcHealthJobLock.Lock()
 	defer gRpcHealthJobLock.Unlock()
 
-	nodes, err := data.ListRpcNodes("")
+	nodes, err := data.ListRpcNodesForHealth()
 	if err != nil {
 		log.Sugar.Errorf("[rpc-health] list nodes err=%v", err)
 		return

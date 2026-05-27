@@ -65,18 +65,18 @@ func runPlasmaListener(contracts []common.Address) {
 		}
 	}()
 
-	wsURL, ok := resolveChainWsURL(mdb.NetworkPlasma, "[PLASMA-WS]")
+	wsNode, ok := resolveChainWsNode(mdb.NetworkPlasma, "[PLASMA-WS]")
 	if !ok {
 		return
 	}
-	log.Sugar.Infof("[PLASMA-WS] connecting to %s watching %d contract(s)", wsURL, len(contracts))
+	log.Sugar.Infof("[PLASMA-WS] connecting using WSS node %s watching %d contract(s)", data.RpcNodeLogLabel(wsNode), len(contracts))
 
 	query := ethereum.FilterQuery{
 		Addresses: contracts,
 		Topics:    [][]common.Hash{},
 	}
 
-	runEvmWsLogListener(ctx, "[PLASMA-WS]", wsURL, query, func(client *ethclient.Client, vLog types.Log) {
+	runEvmWsLogListener(ctx, "[PLASMA-WS]", wsNode, query, func(client *ethclient.Client, vLog types.Log) {
 		if len(vLog.Topics) < 3 {
 			return
 		}
