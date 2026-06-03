@@ -51,6 +51,12 @@
 
 ---
 
+## 安全审计
+Epusdt 已完成第三方安全审计。
+[查看安全审计报告](https://github.com/VectorBits/audit/blob/main/epusdt-secure-audit-report-2026-05-14.pdf)
+
+---
+
 ## 广泛兼容，即插即用
 
 无论你运营的是哪类系统，Epusdt 均可基于现有接口方案，**无需重构业务逻辑**，快速接入，立即获得 Crypto 收款能力，低成本扩展全球支付场景：
@@ -101,6 +107,31 @@ Epusdt
 ├── src/        项目核心代码
 └── wiki/       文档与知识库
 ```
+
+---
+
+## 程序截图
+
+<table>
+  <tr>
+    <td align="center" valign="top">
+      <img src="wiki/img/web2.png" alt="Epusdt 管理面板首页" height="260"><br>
+      <sub>管理面板首页</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="wiki/img/web1.png" alt="Epusdt 管理面板" height="260"><br>
+      <sub>管理面板</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="wiki/img/pay1.jpeg" alt="Epusdt 收银台" height="260"><br>
+      <sub>收银台</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="wiki/img/pay2.jpeg" alt="Epusdt 支付页面" height="260"><br>
+      <sub>支付页面</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
