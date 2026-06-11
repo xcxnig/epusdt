@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/GMWalletApp/epusdt/util/http_client"
 	"github.com/go-resty/resty/v2"
+	"github.com/xssnick/tonutils-go/address"
 )
 
 func newCreateTransactionRequest(orderID string, amount float64) *request.CreateTransactionRequest {
@@ -278,6 +280,424 @@ func TestCreateTransactionNormalizesEvmReceiveAddressToLowercase(t *testing.T) {
 	}
 	if tradeID != resp.TradeId {
 		t.Fatalf("runtime lock trade_id = %q, want %q", tradeID, resp.TradeId)
+	}
+}
+
+func TestCreateTransactionCreatesTonOrderAndRawLock(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"ton":0.5}}`, "json"); err != nil {
+		t.Fatalf("set forced rate: %v", err)
+	}
+	addr := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	wallet, err := data.AddWalletAddressWithNetwork(mdb.NetworkTon, addr.StringRaw())
+	if err != nil {
+		t.Fatalf("add ton wallet: %v", err)
+	}
+
+	req := newCreateTransactionRequest("order_ton_native_1", 10)
+	req.Network = mdb.NetworkTon
+	req.Token = "TON"
+
+	resp, err := CreateTransaction(req, nil)
+	if err != nil {
+		t.Fatalf("create TON transaction: %v", err)
+	}
+	if resp.ReceiveAddress != wallet.Address {
+		t.Fatalf("receive address = %q, want %q", resp.ReceiveAddress, wallet.Address)
+	}
+	if resp.Token != "TON" {
+		t.Fatalf("token = %q, want TON", resp.Token)
+	}
+	if got := fmt.Sprintf("%.2f", resp.ActualAmount); got != "5.00" {
+		t.Fatalf("actual amount = %s, want 5.00", got)
+	}
+
+	tradeID, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkTon, addr.StringRaw(), "TON", resp.ActualAmount)
+	if err != nil {
+		t.Fatalf("lookup ton runtime lock: %v", err)
+	}
+	if tradeID != resp.TradeId {
+		t.Fatalf("runtime lock trade_id = %q, want %q", tradeID, resp.TradeId)
+	}
+}
+
+func TestCreateTransactionCreatesTonOrderWithConfiguredPrecision(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := data.SetSetting(mdb.SettingGroupSystem, mdb.SettingKeyAmountPrecision, "4", mdb.SettingTypeInt); err != nil {
+		t.Fatalf("set amount precision: %v", err)
+	}
+	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"ton":0.12345}}`, "json"); err != nil {
+		t.Fatalf("set forced rate: %v", err)
+	}
+	addr := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	if _, err := data.AddWalletAddressWithNetwork(mdb.NetworkTon, addr.StringRaw()); err != nil {
+		t.Fatalf("add ton wallet: %v", err)
+	}
+
+	req := newCreateTransactionRequest("order_ton_precision_1", 10)
+	req.Network = mdb.NetworkTon
+	req.Token = "TON"
+	resp, err := CreateTransaction(req, nil)
+	if err != nil {
+		t.Fatalf("create TON transaction: %v", err)
+	}
+	if got := fmt.Sprintf("%.4f", resp.ActualAmount); got != "1.2345" {
+		t.Fatalf("actual amount = %s, want 1.2345", got)
+	}
+	tradeID, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkTon, addr.Bounce(true).String(), "TON", 1.2345)
+	if err != nil {
+		t.Fatalf("lookup ton runtime lock: %v", err)
+	}
+	if tradeID != resp.TradeId {
+		t.Fatalf("runtime lock trade_id = %q, want %q", tradeID, resp.TradeId)
+	}
+}
+
+func TestCreateTransactionRejectsUnsupportedTonToken(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	req := newCreateTransactionRequest("order_ton_gram_1", 10)
+	req.Network = mdb.NetworkTon
+	req.Token = "GRAM"
+
+	_, err := CreateTransaction(req, nil)
+	if err != constant.SupportedAssetNotFound {
+		t.Fatalf("create unsupported TON token error = %v, want %v", err, constant.SupportedAssetNotFound)
+	}
+}
+
+func TestCreateTransactionRejectsDisabledTonTokenBeforeRate(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := dao.Mdb.Model(&mdb.ChainToken{}).
+		Where("network = ? AND symbol = ?", mdb.NetworkTon, "TON").
+		Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable TON token: %v", err)
+	}
+	req := newCreateTransactionRequest("order_ton_disabled_1", 10)
+	req.Network = mdb.NetworkTon
+	req.Token = "TON"
+
+	_, err := CreateTransaction(req, nil)
+	if err != constant.SupportedAssetNotFound {
+		t.Fatalf("create disabled TON token error = %v, want %v", err, constant.SupportedAssetNotFound)
+	}
+}
+
+func TestCreateTransactionSupportedTonTokenWithoutRateReturnsRateError(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"ton":0}}`, "json"); err != nil {
+		t.Fatalf("set forced rate: %v", err)
+	}
+	if err := data.SetSetting("rate", "rate.api_url", "", "string"); err != nil {
+		t.Fatalf("clear rate api url: %v", err)
+	}
+	req := newCreateTransactionRequest("order_ton_missing_rate_1", 10)
+	req.Network = mdb.NetworkTon
+	req.Token = "TON"
+
+	_, err := CreateTransaction(req, nil)
+	if err != constant.RateAmountErr {
+		t.Fatalf("create TON without rate error = %v, want %v", err, constant.RateAmountErr)
+	}
+}
+
+func TestSwitchNetworkCreatesTonSubOrderAndRawLock(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"usdt":0.1,"ton":0.5}}`, "json"); err != nil {
+		t.Fatalf("set forced rate: %v", err)
+	}
+	if _, err := data.AddWalletAddress("TTestTronAddress001"); err != nil {
+		t.Fatalf("add tron wallet: %v", err)
+	}
+	addr := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	wallet, err := data.AddWalletAddressWithNetwork(mdb.NetworkTon, addr.StringRaw())
+	if err != nil {
+		t.Fatalf("add ton wallet: %v", err)
+	}
+
+	parentReq := newCreateTransactionRequest("order_switch_ton_1", 10)
+	parentReq.Network = mdb.NetworkTron
+	parentResp, err := CreateTransaction(parentReq, nil)
+	if err != nil {
+		t.Fatalf("create parent transaction: %v", err)
+	}
+
+	subResp, err := SwitchNetwork(&request.SwitchNetworkRequest{
+		TradeId: parentResp.TradeId,
+		Token:   "TON",
+		Network: mdb.NetworkTon,
+	})
+	if err != nil {
+		t.Fatalf("switch to TON: %v", err)
+	}
+	if subResp.Network != mdb.NetworkTon || subResp.Token != "TON" {
+		t.Fatalf("sub order network/token = %s/%s, want ton/TON", subResp.Network, subResp.Token)
+	}
+	if subResp.ReceiveAddress != wallet.Address {
+		t.Fatalf("sub order receive address = %q, want %q", subResp.ReceiveAddress, wallet.Address)
+	}
+	if got := fmt.Sprintf("%.2f", subResp.ActualAmount); got != "5.00" {
+		t.Fatalf("sub order actual amount = %s, want 5.00", got)
+	}
+	tradeID, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkTon, addr.StringRaw(), "TON", subResp.ActualAmount)
+	if err != nil {
+		t.Fatalf("lookup TON sub-order lock: %v", err)
+	}
+	if tradeID != subResp.TradeId {
+		t.Fatalf("TON sub-order lock trade_id = %q, want %q", tradeID, subResp.TradeId)
+	}
+}
+
+func TestSwitchNetworkRejectsUnsupportedTonToken(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"usdt":0.1}}`, "json"); err != nil {
+		t.Fatalf("set forced rate: %v", err)
+	}
+	if _, err := data.AddWalletAddress("TTestTronAddress002"); err != nil {
+		t.Fatalf("add tron wallet: %v", err)
+	}
+	parentResp, err := CreateTransaction(newCreateTransactionRequest("order_switch_gram_1", 10), nil)
+	if err != nil {
+		t.Fatalf("create parent transaction: %v", err)
+	}
+
+	_, err = SwitchNetwork(&request.SwitchNetworkRequest{
+		TradeId: parentResp.TradeId,
+		Token:   "GRAM",
+		Network: mdb.NetworkTon,
+	})
+	if err != constant.SupportedAssetNotFound {
+		t.Fatalf("switch unsupported TON token error = %v, want %v", err, constant.SupportedAssetNotFound)
+	}
+}
+
+func TestTryProcessTonTransferMarksOrderPaidAndReleasesRawLock(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"ton":0.5}}`, "json"); err != nil {
+		t.Fatalf("set forced rate: %v", err)
+	}
+	addr := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	if _, err := data.AddWalletAddressWithNetwork(mdb.NetworkTon, addr.StringRaw()); err != nil {
+		t.Fatalf("add ton wallet: %v", err)
+	}
+	req := newCreateTransactionRequest("order_ton_process_1", 10)
+	req.Network = mdb.NetworkTon
+	req.Token = "TON"
+	resp, err := CreateTransaction(req, nil)
+	if err != nil {
+		t.Fatalf("create TON transaction: %v", err)
+	}
+
+	transfer := &TonObservedTransfer{
+		ReceiveAddress: resp.ReceiveAddress,
+		Token:          mdb.ChainToken{BaseModel: mdb.BaseModel{ID: 1}, Network: mdb.NetworkTon, Symbol: "TON", Decimals: 9, Enabled: true},
+		RawAmount:      big.NewInt(5_000_000_000),
+		Amount:         resp.ActualAmount,
+		BlockTimeMs:    time.Now().Add(time.Second).UnixMilli(),
+		LT:             100,
+		TxHashHex:      strings.Repeat("1", 64),
+		BlockID:        TonCanonicalBlockTransactionID(addr.StringRaw(), 100, strings.Repeat("1", 64)),
+	}
+	TryProcessTonTransfer(transfer)
+
+	order, err := data.GetOrderInfoByTradeId(resp.TradeId)
+	if err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if order.Status != mdb.StatusPaySuccess {
+		t.Fatalf("order status = %d, want %d", order.Status, mdb.StatusPaySuccess)
+	}
+	if order.BlockTransactionId != transfer.BlockID {
+		t.Fatalf("block transaction id = %q, want %q", order.BlockTransactionId, transfer.BlockID)
+	}
+	lock, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkTon, addr.StringRaw(), "TON", resp.ActualAmount)
+	if err != nil {
+		t.Fatalf("lookup ton lock: %v", err)
+	}
+	if lock != "" {
+		t.Fatalf("TON lock still exists after payment: %s", lock)
+	}
+}
+
+func TestTryProcessTonJettonTransferMarksUSDTOrderPaid(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"usdt":0.1}}`, "json"); err != nil {
+		t.Fatalf("set forced rate: %v", err)
+	}
+	addr := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	if _, err := data.AddWalletAddressWithNetwork(mdb.NetworkTon, addr.StringRaw()); err != nil {
+		t.Fatalf("add ton wallet: %v", err)
+	}
+	req := newCreateTransactionRequest("order_ton_usdt_process_1", 10)
+	req.Network = mdb.NetworkTon
+	req.Token = "USDT"
+	resp, err := CreateTransaction(req, nil)
+	if err != nil {
+		t.Fatalf("create TON USDT transaction: %v", err)
+	}
+
+	transfer := &TonObservedTransfer{
+		ReceiveAddress: resp.ReceiveAddress,
+		Token:          mdb.ChainToken{BaseModel: mdb.BaseModel{ID: 2}, Network: mdb.NetworkTon, Symbol: "USDT", Decimals: 6, Enabled: true},
+		RawAmount:      big.NewInt(1_000_000),
+		Amount:         resp.ActualAmount,
+		BlockTimeMs:    time.Now().Add(time.Second).UnixMilli(),
+		LT:             110,
+		TxHashHex:      strings.Repeat("4", 64),
+		BlockID:        TonCanonicalBlockTransactionID(addr.StringRaw(), 110, strings.Repeat("4", 64)),
+	}
+	TryProcessTonTransfer(transfer)
+
+	order, err := data.GetOrderInfoByTradeId(resp.TradeId)
+	if err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if order.Status != mdb.StatusPaySuccess {
+		t.Fatalf("order status = %d, want %d", order.Status, mdb.StatusPaySuccess)
+	}
+	if order.BlockTransactionId != transfer.BlockID {
+		t.Fatalf("block transaction id = %q, want %q", order.BlockTransactionId, transfer.BlockID)
+	}
+	lock, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkTon, addr.StringRaw(), "USDT", resp.ActualAmount)
+	if err != nil {
+		t.Fatalf("lookup TON USDT lock: %v", err)
+	}
+	if lock != "" {
+		t.Fatalf("TON USDT lock still exists after payment: %s", lock)
+	}
+}
+
+func TestTryProcessTonTransferSkipsTransfersBeforeOrderCreation(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"ton":0.5}}`, "json"); err != nil {
+		t.Fatalf("set forced rate: %v", err)
+	}
+	addr := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	if _, err := data.AddWalletAddressWithNetwork(mdb.NetworkTon, addr.StringRaw()); err != nil {
+		t.Fatalf("add ton wallet: %v", err)
+	}
+	req := newCreateTransactionRequest("order_ton_old_transfer_1", 10)
+	req.Network = mdb.NetworkTon
+	req.Token = "TON"
+	resp, err := CreateTransaction(req, nil)
+	if err != nil {
+		t.Fatalf("create TON transaction: %v", err)
+	}
+	order, err := data.GetOrderInfoByTradeId(resp.TradeId)
+	if err != nil {
+		t.Fatalf("load order: %v", err)
+	}
+
+	TryProcessTonTransfer(&TonObservedTransfer{
+		ReceiveAddress: resp.ReceiveAddress,
+		Token:          mdb.ChainToken{BaseModel: mdb.BaseModel{ID: 1}, Network: mdb.NetworkTon, Symbol: "TON", Decimals: 9, Enabled: true},
+		RawAmount:      big.NewInt(5_000_000_000),
+		Amount:         resp.ActualAmount,
+		BlockTimeMs:    order.CreatedAt.TimestampMilli() - 1,
+		LT:             101,
+		TxHashHex:      strings.Repeat("2", 64),
+		BlockID:        TonCanonicalBlockTransactionID(addr.StringRaw(), 101, strings.Repeat("2", 64)),
+	})
+
+	order, err = data.GetOrderInfoByTradeId(resp.TradeId)
+	if err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if order.Status != mdb.StatusWaitPay {
+		t.Fatalf("order status = %d, want wait-pay", order.Status)
+	}
+	if order.BlockTransactionId != "" {
+		t.Fatalf("old transfer set block transaction id = %q", order.BlockTransactionId)
+	}
+}
+
+func TestTryProcessTonSubOrderPaysParentAndReleasesLocks(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"usdt":0.1,"ton":0.5}}`, "json"); err != nil {
+		t.Fatalf("set forced rate: %v", err)
+	}
+	if _, err := data.AddWalletAddress("TTestTronAddressForTonSub"); err != nil {
+		t.Fatalf("add tron wallet: %v", err)
+	}
+	addr := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	if _, err := data.AddWalletAddressWithNetwork(mdb.NetworkTon, addr.StringRaw()); err != nil {
+		t.Fatalf("add ton wallet: %v", err)
+	}
+
+	parentReq := newCreateTransactionRequest("order_ton_sub_parent_1", 10)
+	parentReq.Network = mdb.NetworkTron
+	parentResp, err := CreateTransaction(parentReq, nil)
+	if err != nil {
+		t.Fatalf("create parent order: %v", err)
+	}
+	subResp, err := SwitchNetwork(&request.SwitchNetworkRequest{
+		TradeId: parentResp.TradeId,
+		Token:   "TON",
+		Network: mdb.NetworkTon,
+	})
+	if err != nil {
+		t.Fatalf("switch to TON: %v", err)
+	}
+
+	TryProcessTonTransfer(&TonObservedTransfer{
+		ReceiveAddress: subResp.ReceiveAddress,
+		Token:          mdb.ChainToken{BaseModel: mdb.BaseModel{ID: 1}, Network: mdb.NetworkTon, Symbol: "TON", Decimals: 9, Enabled: true},
+		RawAmount:      big.NewInt(5_000_000_000),
+		Amount:         subResp.ActualAmount,
+		BlockTimeMs:    time.Now().Add(time.Second).UnixMilli(),
+		LT:             102,
+		TxHashHex:      strings.Repeat("3", 64),
+		BlockID:        TonCanonicalBlockTransactionID(addr.StringRaw(), 102, strings.Repeat("3", 64)),
+	})
+
+	parent, err := data.GetOrderInfoByTradeId(parentResp.TradeId)
+	if err != nil {
+		t.Fatalf("reload parent order: %v", err)
+	}
+	if parent.Status != mdb.StatusPaySuccess {
+		t.Fatalf("parent status = %d, want paid", parent.Status)
+	}
+	sub, err := data.GetOrderInfoByTradeId(subResp.TradeId)
+	if err != nil {
+		t.Fatalf("reload sub order: %v", err)
+	}
+	if sub.Status != mdb.StatusPaySuccess {
+		t.Fatalf("sub status = %d, want paid", sub.Status)
+	}
+	parentLock, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkTron, parentResp.ReceiveAddress, parentResp.Token, parentResp.ActualAmount)
+	if err != nil {
+		t.Fatalf("lookup parent lock: %v", err)
+	}
+	if parentLock != "" {
+		t.Fatalf("parent lock still exists: %s", parentLock)
+	}
+	subLock, err := data.GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkTon, addr.StringRaw(), "TON", subResp.ActualAmount)
+	if err != nil {
+		t.Fatalf("lookup sub lock: %v", err)
+	}
+	if subLock != "" {
+		t.Fatalf("TON sub-order lock still exists: %s", subLock)
 	}
 }
 

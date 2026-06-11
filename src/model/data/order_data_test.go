@@ -8,6 +8,7 @@ import (
 
 	"github.com/GMWalletApp/epusdt/internal/testutil"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/xssnick/tonutils-go/address"
 )
 
 func TestEvmTransactionLockAddressIsCaseInsensitive(t *testing.T) {
@@ -154,5 +155,32 @@ func TestNonEvmTransactionLockAddressRemainsCaseSensitive(t *testing.T) {
 	}
 	if gotTradeID != "" {
 		t.Fatalf("tron address lookup should remain case-sensitive, got trade id %q", gotTradeID)
+	}
+}
+
+func TestTonTransactionLockAddressUsesRawKey(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	bounceable := "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I"
+	addr := address.MustParseAddr(bounceable)
+	nonBounce := addr.Bounce(false).String()
+
+	if err := LockTransaction(mdb.NetworkTon, bounceable, "TON", "trade-ton", 1.23, time.Hour); err != nil {
+		t.Fatalf("lock ton transaction: %v", err)
+	}
+	gotTradeID, err := GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkTon, nonBounce, "TON", 1.23)
+	if err != nil {
+		t.Fatalf("lookup ton lock: %v", err)
+	}
+	if gotTradeID != "trade-ton" {
+		t.Fatalf("ton lock lookup = %q, want trade-ton", gotTradeID)
+	}
+	gotTradeID, err = GetTradeIdByWalletAddressAndAmountAndToken(mdb.NetworkTon, addr.StringRaw(), "TON", 1.23)
+	if err != nil {
+		t.Fatalf("lookup ton raw lock: %v", err)
+	}
+	if gotTradeID != "trade-ton" {
+		t.Fatalf("ton raw lock lookup = %q, want trade-ton", gotTradeID)
 	}
 }

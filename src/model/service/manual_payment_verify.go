@@ -16,6 +16,7 @@ import (
 	tron "github.com/GMWalletApp/epusdt/crypto"
 	"github.com/GMWalletApp/epusdt/model/data"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	addressutil "github.com/GMWalletApp/epusdt/util/address"
 	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/GMWalletApp/epusdt/util/math"
 	"github.com/ethereum/go-ethereum/common"
@@ -23,6 +24,10 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/shopspring/decimal"
 	"github.com/tidwall/gjson"
+	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/tlb"
+	"github.com/xssnick/tonutils-go/ton"
+	"github.com/xssnick/tonutils-go/ton/jetton"
 )
 
 const manualVerifyRequestTimeout = 15 * time.Second
@@ -82,6 +87,8 @@ func validateManualOrderPaymentDefault(order *mdb.Orders, blockTransactionID str
 		canonicalTxID, err = validateManualTronPayment(order, txID)
 	case mdb.NetworkSolana:
 		canonicalTxID, err = validateManualSolanaPayment(order, txID)
+	case mdb.NetworkTon:
+		canonicalTxID, err = validateManualTonPayment(order, txID)
 	case mdb.NetworkEthereum, mdb.NetworkBsc, mdb.NetworkPolygon, mdb.NetworkPlasma:
 		canonicalTxID, err = validateManualEvmPayment(order, txID)
 	default:
@@ -634,6 +641,245 @@ func tronPostJSON(baseURL, apiKey, path string, body interface{}, out interface{
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
 	}
 	return json.Unmarshal(raw, out)
+}
+
+type manualTonTxRef struct {
+	ReceiveRaw string
+	LT         uint64
+	HashHex    string
+	HasLT      bool
+}
+
+func validateManualTonPayment(order *mdb.Orders, txID string) (string, error) {
+	ref, err := parseManualTonTxRef(txID)
+	if err != nil {
+		return "", err
+	}
+	orderAddr, err := addressutil.ParseTonMainnetAddress(order.ReceiveAddress)
+	if err != nil {
+		return "", fmt.Errorf("invalid order receive address: %w", err)
+	}
+	if ref.ReceiveRaw != "" && ref.ReceiveRaw != orderAddr.Raw {
+		return "", fmt.Errorf("transaction recipient mismatch")
+	}
+
+	nodes, err := data.ListManualPaymentRpcCandidates(mdb.NetworkTon, mdb.RpcNodeTypeLite)
+	if err != nil {
+		return "", err
+	}
+	if len(nodes) == 0 {
+		return "", fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkTon, mdb.RpcNodeTypeLite)
+	}
+
+	var verifyErrors []string
+	for _, node := range nodes {
+		api, closeFn, err := dialManualTonClient(node)
+		if err != nil {
+			verifyErrors = append(verifyErrors, fmt.Sprintf("%s: connect: %v", manualRpcNodeLabel(node), err))
+			continue
+		}
+		canonicalID, err := validateManualTonPaymentWithAPI(context.Background(), api, order, orderAddr.Address, ref)
+		closeFn()
+		if err != nil {
+			verifyErrors = append(verifyErrors, fmt.Sprintf("%s: %v", manualRpcNodeLabel(node), err))
+			continue
+		}
+		return canonicalID, nil
+	}
+	if len(verifyErrors) > 0 {
+		return "", fmt.Errorf("manual TON verification failed: %s", strings.Join(verifyErrors, "; "))
+	}
+	return "", fmt.Errorf("no enabled %s %s RPC node configured in rpc_nodes", mdb.NetworkTon, mdb.RpcNodeTypeLite)
+}
+
+func parseManualTonTxRef(input string) (manualTonTxRef, error) {
+	raw := strings.TrimSpace(input)
+	if raw == "" {
+		return manualTonTxRef{}, fmt.Errorf("block_transaction_id is required")
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "ton:") {
+		body := raw[4:]
+		last := strings.LastIndex(body, ":")
+		if last <= 0 || last == len(body)-1 {
+			return manualTonTxRef{}, fmt.Errorf("invalid ton canonical transaction id")
+		}
+		hashHex, err := normalizeTonTxHashHex(body[last+1:])
+		if err != nil {
+			return manualTonTxRef{}, err
+		}
+		left := body[:last]
+		mid := strings.LastIndex(left, ":")
+		if mid <= 0 || mid == len(left)-1 {
+			return manualTonTxRef{}, fmt.Errorf("invalid ton canonical transaction id")
+		}
+		lt, err := parseUint64Strict(left[mid+1:])
+		if err != nil {
+			return manualTonTxRef{}, fmt.Errorf("invalid ton transaction lt")
+		}
+		receiveRaw, err := addressutil.TonRawAddressKey(left[:mid])
+		if err != nil {
+			return manualTonTxRef{}, fmt.Errorf("invalid ton canonical recipient: %w", err)
+		}
+		return manualTonTxRef{ReceiveRaw: receiveRaw, LT: lt, HashHex: hashHex, HasLT: true}, nil
+	}
+	if idx := strings.Index(raw, ":"); idx > 0 {
+		lt, err := parseUint64Strict(raw[:idx])
+		if err != nil {
+			return manualTonTxRef{}, fmt.Errorf("invalid ton transaction lt")
+		}
+		hashHex, err := normalizeTonTxHashHex(raw[idx+1:])
+		if err != nil {
+			return manualTonTxRef{}, err
+		}
+		return manualTonTxRef{LT: lt, HashHex: hashHex, HasLT: true}, nil
+	}
+	hashHex, err := normalizeTonTxHashHex(raw)
+	if err != nil {
+		return manualTonTxRef{}, err
+	}
+	return manualTonTxRef{HashHex: hashHex}, nil
+}
+
+func normalizeTonTxHashHex(raw string) (string, error) {
+	hashHex := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(raw, "0x"), "0X")))
+	if len(hashHex) != 64 {
+		return "", fmt.Errorf("invalid ton transaction hash length")
+	}
+	if _, err := hex.DecodeString(hashHex); err != nil {
+		return "", fmt.Errorf("invalid ton transaction hash")
+	}
+	return hashHex, nil
+}
+
+func parseUint64Strict(raw string) (uint64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("empty integer")
+	}
+	var out uint64
+	for _, ch := range raw {
+		if ch < '0' || ch > '9' {
+			return 0, fmt.Errorf("invalid integer")
+		}
+		out = out*10 + uint64(ch-'0')
+	}
+	return out, nil
+}
+
+func dialManualTonClient(node mdb.RpcNode) (ton.APIClientWrapped, func(), error) {
+	ctx, cancel := context.WithTimeout(context.Background(), manualVerifyRequestTimeout)
+	defer cancel()
+	return ConnectTonLiteAPI(ctx, node.Url, manualVerifyRequestTimeout, 3)
+}
+
+func validateManualTonPaymentWithAPI(ctx context.Context, api ton.APIClientWrapped, order *mdb.Orders, receive *address.Address, ref manualTonTxRef) (string, error) {
+	master, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		return "", fmt.Errorf("fetch current masterchain: %w", err)
+	}
+	txs, err := listManualTonCandidateTransactions(ctx, api, master, receive, ref)
+	if err != nil {
+		return "", fmt.Errorf("list ton account transactions: %w", err)
+	}
+	if len(txs) == 0 {
+		return "", fmt.Errorf("transaction not found")
+	}
+
+	state, err := manualTonTokenState(ctx, api, master, receive)
+	if err != nil {
+		return "", err
+	}
+	return validateManualTonPaymentCandidates(order, receive, ref, txs, state)
+}
+
+func validateManualTonPaymentCandidates(order *mdb.Orders, receive *address.Address, ref manualTonTxRef, txs []*tlb.Transaction, state *manualTonState) (string, error) {
+	if state == nil {
+		state = &manualTonState{jettonWallets: make(map[string]mdb.ChainToken)}
+	}
+	var matched []*TonObservedTransfer
+	for _, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		hashHex := hex.EncodeToString(tx.Hash)
+		if !strings.EqualFold(hashHex, ref.HashHex) {
+			continue
+		}
+		if ref.HasLT && tx.LT != ref.LT {
+			continue
+		}
+		transfer, err := ParseTonInboundTransfer(tx, receive, state.nativeToken, state.jettonWallets)
+		if err != nil || transfer == nil {
+			continue
+		}
+		if err = EnsureTonTransferMatchesOrder(order, transfer); err != nil {
+			return "", err
+		}
+		matched = append(matched, transfer)
+	}
+	if len(matched) == 0 {
+		return "", fmt.Errorf("matching ton transfer to order address not found")
+	}
+	if len(matched) > 1 && !ref.HasLT {
+		return "", fmt.Errorf("ton transaction hash matched multiple recent transactions; submit canonical id or lt:hash")
+	}
+	receiveRaw := addressutil.TonRawAddressObjectKey(receive)
+	return TonCanonicalBlockTransactionID(receiveRaw, matched[0].LT, matched[0].TxHashHex), nil
+}
+
+func listManualTonCandidateTransactions(ctx context.Context, api ton.APIClientWrapped, master *ton.BlockIDExt, receive *address.Address, ref manualTonTxRef) ([]*tlb.Transaction, error) {
+	waiter := api.WaitForBlock(master.SeqNo)
+	if ref.HasLT {
+		hashBytes, err := hex.DecodeString(ref.HashHex)
+		if err != nil {
+			return nil, err
+		}
+		return waiter.ListTransactions(ctx, receive, 1, ref.LT, hashBytes)
+	}
+
+	account, err := waiter.GetAccount(ctx, master, receive)
+	if err != nil {
+		return nil, fmt.Errorf("fetch ton account state: %w", err)
+	}
+	if account == nil || account.LastTxLT == 0 || len(account.LastTxHash) == 0 {
+		return nil, fmt.Errorf("transaction not found")
+	}
+	return waiter.ListTransactions(ctx, receive, 100, account.LastTxLT, account.LastTxHash)
+}
+
+type manualTonState struct {
+	nativeToken   *mdb.ChainToken
+	jettonWallets map[string]mdb.ChainToken
+}
+
+func manualTonTokenState(ctx context.Context, api ton.APIClientWrapped, master *ton.BlockIDExt, receive *address.Address) (*manualTonState, error) {
+	tokens, err := data.ListEnabledChainTokensByNetwork(mdb.NetworkTon)
+	if err != nil {
+		return nil, err
+	}
+	state := &manualTonState{jettonWallets: make(map[string]mdb.ChainToken)}
+	for i := range tokens {
+		sym := strings.ToUpper(strings.TrimSpace(tokens[i].Symbol))
+		contract := strings.TrimSpace(tokens[i].ContractAddress)
+		if sym == TonNativeSymbol && contract == "" {
+			token := tokens[i]
+			state.nativeToken = &token
+			continue
+		}
+		if contract == "" {
+			continue
+		}
+		masterAddr, err := addressutil.ParseTonMainnetAddress(contract)
+		if err != nil {
+			continue
+		}
+		wallet, err := jetton.NewJettonMasterClient(api, masterAddr.Address).GetJettonWalletAtBlock(ctx, receive, master)
+		if err != nil {
+			continue
+		}
+		state.jettonWallets[addressutil.TonRawAddressObjectKey(wallet.Address())] = tokens[i]
+	}
+	return state, nil
 }
 
 func validateManualSolanaPayment(order *mdb.Orders, sig string) (string, error) {

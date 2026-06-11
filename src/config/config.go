@@ -352,7 +352,13 @@ func GetRateForCoin(coin string, base string) float64 {
 	if coin == "usdt" && base == "usd" {
 		return 1
 	}
-	return getRateForCoinFromAPI(coin, base)
+	if rate := getRateForCoinFromAPI(coin, base); rate > 0 {
+		return rate
+	}
+	if coin == "ton" {
+		return getRateForCoinFromAPI("toncoin", base)
+	}
+	return 0
 }
 
 func getForcedRateForCoin(coin string, base string) float64 {

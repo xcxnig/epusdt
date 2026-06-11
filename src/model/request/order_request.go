@@ -6,8 +6,8 @@ import "github.com/gookit/validate"
 type CreateTransactionRequest struct {
 	OrderId     string  `json:"order_id" form:"order_id" validate:"required|maxLen:32" example:"ORD20260416001"`
 	Currency    string  `json:"currency" form:"currency" validate:"required" example:"cny"` // 法币 如：cny
-	Token       string  `json:"token" form:"token" validate:"required" example:"usdt"`      // 币种 如：usdt
-	Network     string  `json:"network" form:"network" validate:"required" example:"tron"`  // 网络 如：tron
+	Token       string  `json:"token" form:"token" validate:"required" example:"usdt"`      // 币种 如：usdt、ton
+	Network     string  `json:"network" form:"network" validate:"required" example:"tron"`  // 网络 如：ton、tron
 	Amount      float64 `json:"amount" form:"amount" validate:"required|isFloat|gt:0.01" example:"100.00"`
 	NotifyUrl   string  `json:"notify_url" form:"notify_url" validate:"required" example:"https://example.com/notify"`
 	Signature   string  `json:"signature" form:"signature" validate:"required" example:"a1b2c3d4e5f6..."`

@@ -16,8 +16,8 @@ import (
 type CreateRpcNodeRequest struct {
 	Network string `json:"network" validate:"required" example:"tron"`
 	Url     string `json:"url" validate:"required" example:"https://api.trongrid.io"`
-	// 连接类型 http=HTTP请求 ws=WebSocket长连接
-	Type    string `json:"type" validate:"required|in:http,ws" enums:"http,ws" example:"http"`
+	// 连接类型 http=HTTP请求 ws=WebSocket长连接 lite=TON liteserver配置
+	Type    string `json:"type" validate:"required|in:http,ws,lite" enums:"http,ws,lite" example:"http"`
 	Weight  int    `json:"weight" example:"1"`
 	ApiKey  string `json:"api_key" example:""`
 	Enabled *bool  `json:"enabled" example:"true"`
@@ -187,9 +187,8 @@ func (c *BaseAdminController) DeleteRpcNode(ctx echo.Context) error {
 }
 
 // HealthCheckRpcNode performs an on-demand probe and writes the result.
-// For HTTP endpoints this is a GET to the URL with a short timeout; for
-// WS we just attempt a TCP-level check via the same HTTP client (the
-// handshake URL resolves the host identically).
+// For HTTP/WS/lite endpoints this is a TCP-level check against the configured
+// URL host. TON lite rows usually point to a global.config.json HTTPS URL.
 // @Summary      Health check RPC node
 // @Description  Perform an on-demand health probe on an RPC node
 // @Tags         Admin RPC Nodes
@@ -253,6 +252,11 @@ func validateRpcNodeURLForType(rawURL string, nodeType string) error {
 			return nil
 		}
 		return constant.RpcNodeWebSocketURLErr
+	case mdb.RpcNodeTypeLite:
+		if scheme == "http" || scheme == "https" {
+			return nil
+		}
+		return constant.RpcNodeHTTPURLErr
 	default:
 		return constant.RpcNodeTypeErr
 	}

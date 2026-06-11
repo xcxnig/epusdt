@@ -5,6 +5,7 @@ import (
 
 	"github.com/GMWalletApp/epusdt/model/dao"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	addressutil "github.com/GMWalletApp/epusdt/util/address"
 	"github.com/GMWalletApp/epusdt/util/constant"
 )
 
@@ -34,10 +35,23 @@ func normalizeWalletAddressByNetwork(network, address string) string {
 	return address
 }
 
+func normalizeWalletAddressByNetworkE(network, address string) (string, error) {
+	network = normalizeWalletNetwork(network)
+	address = strings.TrimSpace(address)
+	if network == mdb.NetworkTon {
+		return addressutil.NormalizeTonAddress(address)
+	}
+	return normalizeWalletAddressByNetwork(network, address), nil
+}
+
 // AddWalletAddressWithNetwork 创建指定网络的钱包地址
 func AddWalletAddressWithNetwork(network, address string) (*mdb.WalletAddress, error) {
 	network = normalizeWalletNetwork(network)
-	address = normalizeWalletAddressByNetwork(network, address)
+	var err error
+	address, err = normalizeWalletAddressByNetworkE(network, address)
+	if err != nil {
+		return nil, err
+	}
 
 	exist, err := GetWalletAddressByNetworkAndAddress(network, address)
 	if err != nil {
@@ -75,9 +89,13 @@ func AddWalletAddressWithNetwork(network, address string) (*mdb.WalletAddress, e
 // GetWalletAddressByNetworkAndAddress 通过网络和地址查询
 func GetWalletAddressByNetworkAndAddress(network, address string) (*mdb.WalletAddress, error) {
 	network = normalizeWalletNetwork(network)
-	address = normalizeWalletAddressByNetwork(network, address)
+	var err error
+	address, err = normalizeWalletAddressByNetworkE(network, address)
+	if err != nil {
+		return nil, err
+	}
 	walletAddress := new(mdb.WalletAddress)
-	err := dao.Mdb.Model(walletAddress).
+	err = dao.Mdb.Model(walletAddress).
 		Where("network = ?", network).
 		Where("address = ?", address).
 		Limit(1).Find(walletAddress).Error
@@ -126,6 +144,12 @@ func GetAvailableWalletAddressByNetwork(network string) ([]mdb.WalletAddress, er
 		for i := range list {
 			list[i].Address = strings.ToLower(strings.TrimSpace(list[i].Address))
 		}
+	} else if network == mdb.NetworkTon {
+		for i := range list {
+			if normalized, err := addressutil.NormalizeTonAddress(list[i].Address); err == nil {
+				list[i].Address = normalized
+			}
+		}
 	}
 	return list, err
 }
@@ -148,6 +172,12 @@ func GetAllWalletAddressByNetwork(network string) ([]mdb.WalletAddress, error) {
 	if isEVMNetwork(network) {
 		for i := range list {
 			list[i].Address = strings.ToLower(strings.TrimSpace(list[i].Address))
+		}
+	} else if network == mdb.NetworkTon {
+		for i := range list {
+			if normalized, err := addressutil.NormalizeTonAddress(list[i].Address); err == nil {
+				list[i].Address = normalized
+			}
 		}
 	}
 	return list, err

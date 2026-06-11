@@ -14,6 +14,7 @@ import (
 	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/model/request"
 	"github.com/GMWalletApp/epusdt/model/response"
+	addressutil "github.com/GMWalletApp/epusdt/util/address"
 	"github.com/GMWalletApp/epusdt/util/constant"
 	"github.com/GMWalletApp/epusdt/util/log"
 	"github.com/GMWalletApp/epusdt/util/math"
@@ -48,9 +49,25 @@ func normalizeOrderAddressByNetwork(network, address string) string {
 	switch network {
 	case mdb.NetworkEthereum, mdb.NetworkBsc, mdb.NetworkPolygon, mdb.NetworkPlasma:
 		return strings.ToLower(address)
+	case mdb.NetworkTon:
+		if normalized, err := addressutil.NormalizeTonAddress(address); err == nil {
+			return normalized
+		}
+		return address
 	default:
 		return address
 	}
+}
+
+func ensureEnabledOrderAsset(network, token string) (*mdb.ChainToken, error) {
+	tokenRow, err := data.GetEnabledChainTokenBySymbol(network, token)
+	if err != nil {
+		return nil, err
+	}
+	if tokenRow == nil || tokenRow.ID == 0 {
+		return nil, constant.SupportedAssetNotFound
+	}
+	return tokenRow, nil
 }
 
 // CreateTransaction creates a new payment order.
@@ -68,6 +85,21 @@ func CreateTransaction(req *request.CreateTransactionRequest, apiKey *mdb.ApiKey
 
 	amountPrecision := data.GetAmountPrecision()
 	payAmount := math.MustParsePrecFloat64(req.Amount, amountPrecision)
+	exist, err := data.GetOrderInfoByOrderId(req.OrderId)
+	if err != nil {
+		return nil, err
+	}
+	if exist.ID > 0 {
+		return nil, constant.OrderAlreadyExists
+	}
+
+	if !data.IsChainEnabled(network) {
+		return nil, constant.ChainNotEnabled
+	}
+	if _, err = ensureEnabledOrderAsset(network, token); err != nil {
+		return nil, err
+	}
+
 	rate := config.GetRateForCoin(strings.ToLower(token), strings.ToLower(currency))
 	if rate <= 0 {
 		return nil, constant.RateAmountErr
@@ -82,17 +114,6 @@ func CreateTransaction(req *request.CreateTransactionRequest, apiKey *mdb.ApiKey
 		return nil, constant.PayAmountErr
 	}
 
-	exist, err := data.GetOrderInfoByOrderId(req.OrderId)
-	if err != nil {
-		return nil, err
-	}
-	if exist.ID > 0 {
-		return nil, constant.OrderAlreadyExists
-	}
-
-	if !data.IsChainEnabled(network) {
-		return nil, constant.ChainNotEnabled
-	}
 	walletAddress, err := data.GetAvailableWalletAddressByNetwork(network)
 	if err != nil {
 		return nil, err
@@ -485,7 +506,16 @@ func SwitchNetwork(req *request.SwitchNetworkRequest) (*response.CheckoutCounter
 		return nil, constant.SubOrderLimitExceeded
 	}
 
-	// 5. Calculate amount for the new network
+	// 5. Validate the target chain and asset before any rate lookup so
+	// disabled/unknown tokens return the stable unsupported-asset error.
+	if !data.IsChainEnabled(network) {
+		return nil, constant.ChainNotEnabled
+	}
+	if _, err = ensureEnabledOrderAsset(network, token); err != nil {
+		return nil, err
+	}
+
+	// 6. Calculate amount for the new network
 	rate := config.GetRateForCoin(strings.ToLower(token), strings.ToLower(parent.Currency))
 	if rate <= 0 {
 		return nil, constant.RateAmountErr
@@ -496,10 +526,7 @@ func SwitchNetwork(req *request.SwitchNetworkRequest) (*response.CheckoutCounter
 		return nil, constant.PayAmountErr
 	}
 
-	// 6. Find and lock wallet
-	if !data.IsChainEnabled(network) {
-		return nil, constant.ChainNotEnabled
-	}
+	// 7. Find and lock wallet
 	walletAddress, err := data.GetAvailableWalletAddressByNetwork(network)
 	if err != nil {
 		return nil, err
@@ -518,7 +545,7 @@ func SwitchNetwork(req *request.SwitchNetworkRequest) (*response.CheckoutCounter
 		return nil, constant.NotAvailableAmountErr
 	}
 
-	// 7. Create sub-order
+	// 8. Create sub-order
 	tx := dao.Mdb.Begin()
 	subOrder := &mdb.Orders{
 		TradeId:         subTradeID,

@@ -12,7 +12,23 @@ import (
 	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/notify"
 	"github.com/ethereum/go-ethereum/common"
+	"gorm.io/gorm/clause"
 )
+
+func upsertTaskServiceTestChainToken(t *testing.T, token mdb.ChainToken) {
+	t.Helper()
+	if err := dao.Mdb.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "network"}, {Name: "symbol"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"contract_address",
+			"decimals",
+			"enabled",
+			"min_amount",
+		}),
+	}).Create(&token).Error; err != nil {
+		t.Fatalf("seed chain token: %v", err)
+	}
+}
 
 func TestSendPaymentNotificationUsesLatestOrderUpdatedAt(t *testing.T) {
 	cleanup := testutil.SetupTestDatabases(t)
@@ -158,15 +174,13 @@ func TestTryProcessEvmERC20TransferSkipsTransfersBeforeOrderCreation(t *testing.
 	contract := common.HexToAddress("0x3333333333333333333333333333333333333333")
 	receiveAddress := common.HexToAddress("0x4444444444444444444444444444444444444444")
 
-	if err := dao.Mdb.Create(&mdb.ChainToken{
+	upsertTaskServiceTestChainToken(t, mdb.ChainToken{
 		Network:         mdb.NetworkEthereum,
 		Symbol:          tokenSym,
 		ContractAddress: contract.Hex(),
 		Decimals:        6,
 		Enabled:         true,
-	}).Error; err != nil {
-		t.Fatalf("seed chain token: %v", err)
-	}
+	})
 
 	order := &mdb.Orders{
 		TradeId:        tradeID,

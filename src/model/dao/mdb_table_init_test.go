@@ -41,3 +41,31 @@ func TestDefaultRpcNodesIncludesManualVerifyEpusdtEvmNodes(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultRpcNodesIncludesTonLiteGeneralNode(t *testing.T) {
+	var got *mdb.RpcNode
+	nodes := defaultRpcNodes()
+	for i := range nodes {
+		node := nodes[i]
+		if node.Network == mdb.NetworkTon && node.Type == mdb.RpcNodeTypeLite {
+			got = &node
+			break
+		}
+	}
+
+	if got == nil {
+		t.Fatal("missing TON lite seed rpc node")
+	}
+	if got.Url != "https://ton-blockchain.github.io/global.config.json" {
+		t.Fatalf("TON lite seed url = %q", got.Url)
+	}
+	if got.Purpose != mdb.RpcNodePurposeGeneral {
+		t.Fatalf("TON lite seed purpose = %q, want %q", got.Purpose, mdb.RpcNodePurposeGeneral)
+	}
+	if !got.Enabled {
+		t.Fatal("TON lite seed enabled = false, want true")
+	}
+	if got.Status != mdb.RpcNodeStatusUnknown {
+		t.Fatalf("TON lite seed status = %q, want %q", got.Status, mdb.RpcNodeStatusUnknown)
+	}
+}

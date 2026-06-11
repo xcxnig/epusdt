@@ -19,7 +19,7 @@ import (
 // Supported groups and keys:
 //
 //   - group=rate:
-//     rate.forced_rate_list  (json)   — override rate map, e.g. {"cny":{"usdt":0.14635}}; base/coin keys are normalized to lowercase
+//     rate.forced_rate_list  (json)   — override rate map, e.g. {"cny":{"usdt":0.14635,"ton":0.5}}; base/coin keys are normalized to lowercase
 //     rate.api_url           (string) — external rate API URL used when no positive forced rate exists
 //     rate.adjust_percent    (float)  — rate adjustment percentage
 //     rate.okx_c2c_enabled   (bool)   — use OKX C2C rate feed
@@ -27,7 +27,7 @@ import (
 //   - group=epay:
 //     epay.default_token     (string) — token for EPAY orders, e.g. "usdt" (default)
 //     epay.default_currency  (string) — fiat currency for EPAY orders, e.g. "cny" (default)
-//     epay.default_network   (string) — blockchain network for EPAY orders, e.g. "tron" (default)
+//     epay.default_network   (string) — blockchain network for EPAY orders, e.g. "tron" or "ton" (default "tron")
 //
 //   - group=okpay:
 //     okpay.enabled          (bool)   — enable OkPay as a switch-network payment option
@@ -93,9 +93,9 @@ func (c *BaseAdminController) ListSettings(ctx echo.Context) error {
 // @Summary      Upsert settings
 // @Description  Batch insert/update settings. Returns per-key status; failed items include error_code for frontend i18n.
 // @Description  Supported groups: brand, rate, system, epay, okpay.
-// @Description  epay group keys: epay.default_token (e.g. "usdt"), epay.default_currency (e.g. "cny"), epay.default_network (e.g. "tron").
+// @Description  epay group keys: epay.default_token (e.g. "usdt" or "ton"), epay.default_currency (e.g. "cny"), epay.default_network (e.g. "tron" or "ton").
 // @Description  okpay group keys: okpay.enabled, okpay.shop_id, okpay.shop_token, okpay.api_url, okpay.callback_url, okpay.return_url, okpay.timeout_seconds, okpay.allow_tokens.
-// @Description  rate group keys: rate.forced_rate_list (JSON map, e.g. {"cny":{"usdt":0.14635}}; base/coin keys are normalized to lowercase), rate.api_url, rate.adjust_percent, rate.okx_c2c_enabled.
+// @Description  rate group keys: rate.forced_rate_list (JSON map, e.g. {"cny":{"usdt":0.14635,"ton":0.5}}; base/coin keys are normalized to lowercase), rate.api_url, rate.adjust_percent, rate.okx_c2c_enabled.
 // @Description  brand group keys: brand.checkout_name, brand.logo_url, brand.site_title, brand.success_copy, brand.support_url, brand.background_color, brand.background_image_url. Legacy aliases brand.site_name, brand.page_title and brand.pay_success_text are also supported.
 // @Description  system group keys: system.order_expiration_time, system.amount_precision (int, 2-6, default 2).
 // @Tags         Admin Settings

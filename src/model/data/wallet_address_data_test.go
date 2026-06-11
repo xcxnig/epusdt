@@ -7,6 +7,8 @@ import (
 	"github.com/GMWalletApp/epusdt/internal/testutil"
 	"github.com/GMWalletApp/epusdt/model/dao"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	"github.com/GMWalletApp/epusdt/util/constant"
+	"github.com/xssnick/tonutils-go/address"
 )
 
 func TestAddWalletAddressWithNetworkNormalizesEvmAddressToLowercase(t *testing.T) {
@@ -79,5 +81,25 @@ func TestAddWalletAddressWithNetworkKeepsOriginalCaseForNonEvm(t *testing.T) {
 	}
 	if solRow.Address != solAddress {
 		t.Fatalf("solana wallet address = %q, want %q", solRow.Address, solAddress)
+	}
+}
+
+func TestAddWalletAddressWithNetworkNormalizesTonAddressVariants(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	bounceable := "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I"
+	addr := address.MustParseAddr(bounceable)
+	expected := addr.Bounce(false).String()
+
+	row, err := AddWalletAddressWithNetwork(mdb.NetworkTon, addr.StringRaw())
+	if err != nil {
+		t.Fatalf("add raw ton wallet: %v", err)
+	}
+	if row.Address != expected {
+		t.Fatalf("stored TON address = %q, want %q", row.Address, expected)
+	}
+	if _, err = AddWalletAddressWithNetwork(mdb.NetworkTon, bounceable); err != constant.WalletAddressAlreadyExists {
+		t.Fatalf("add equivalent ton wallet error = %v, want already exists", err)
 	}
 }

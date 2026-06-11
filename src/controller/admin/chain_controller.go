@@ -14,8 +14,7 @@ type UpdateChainRequest struct {
 	DisplayName      *string `json:"display_name" example:"Tron"`
 }
 
-// ListChains returns the chains table (tron/ethereum/solana seeded; new
-// networks like bsc/polygon inserted manually once supported).
+// ListChains returns the chains table for all seeded supported networks.
 // @Summary      List chains
 // @Description  Returns all supported blockchain networks
 // @Tags         Admin Chains
@@ -41,7 +40,7 @@ func (c *BaseAdminController) ListChains(ctx echo.Context) error {
 // @Security     AdminJWT
 // @Accept       json
 // @Produce      json
-// @Param        network path string true "Network name (e.g. tron, ethereum, solana)"
+// @Param        network path string true "Network name (e.g. ton, tron, ethereum, solana)"
 // @Param        request body admin.UpdateChainRequest true "Chain settings"
 // @Success      200 {object} response.ApiResponse
 // @Failure      400 {object} response.ApiResponse

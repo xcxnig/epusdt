@@ -329,6 +329,35 @@ func TestGetRateForCoinUsesAPIWhenForcedPairMissing(t *testing.T) {
 	}
 }
 
+func TestGetRateForCoinUsesToncoinAPIFallbackForTon(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("API_RATE_URL", "")
+
+	installMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/cny.json" {
+			t.Fatalf("rate api path = %s, want /cny.json", r.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"cny":{"toncoin":1.82}}`)),
+			Request:    r,
+		}, nil
+	})
+
+	installSettingsGetter(t, map[string]string{
+		"rate.forced_rate_list": `{"cny":{"ton":0}}`,
+		"rate.api_url":          "https://rate.example.test",
+	})
+
+	rate := GetRateForCoin("ton", "cny")
+	if math.Abs(rate-1.82) > 1e-9 {
+		t.Fatalf("GetRateForCoin(ton, cny) = %v, want 1.82", rate)
+	}
+}
+
 func TestGetUsdtRateReturnsZeroWhenAPIUnavailableWithoutAdminOverride(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)

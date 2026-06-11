@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	addressutil "github.com/GMWalletApp/epusdt/util/address"
 	"github.com/btcsuite/btcutil/base58"
 	"github.com/gagliardetto/solana-go"
 )
@@ -53,6 +54,9 @@ func isValidAddressByNetwork(network, addr string) bool {
 		return isValidTronAddress(addr)
 	case mdb.NetworkSolana:
 		return isValidSolanaAddress(addr)
+	case mdb.NetworkTon:
+		_, err := addressutil.ParseTonMainnetAddress(addr)
+		return err == nil
 	default:
 		// 其余 EVM 链统一使用 0x 地址校验
 		return isValidEthereumAddress(addr)
@@ -63,6 +67,11 @@ func normalizeWalletAddressByNetwork(network, addr string) string {
 	addr = strings.TrimSpace(addr)
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case mdb.NetworkTron, mdb.NetworkSolana:
+		return addr
+	case mdb.NetworkTon:
+		if normalized, err := addressutil.NormalizeTonAddress(addr); err == nil {
+			return normalized
+		}
 		return addr
 	default:
 		return strings.ToLower(addr)

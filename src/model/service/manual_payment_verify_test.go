@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,10 +18,32 @@ import (
 	"github.com/GMWalletApp/epusdt/internal/testutil"
 	"github.com/GMWalletApp/epusdt/model/dao"
 	"github.com/GMWalletApp/epusdt/model/mdb"
+	addressutil "github.com/GMWalletApp/epusdt/util/address"
 	"github.com/dromara/carbon/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/tlb"
+	"github.com/xssnick/tonutils-go/ton"
+	"github.com/xssnick/tonutils-go/ton/jetton"
+	"github.com/xssnick/tonutils-go/tvm/cell"
+	"gorm.io/gorm/clause"
 )
+
+func upsertTestChainToken(t *testing.T, token mdb.ChainToken) {
+	t.Helper()
+	if err := dao.Mdb.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "network"}, {Name: "symbol"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"contract_address",
+			"decimals",
+			"enabled",
+			"min_amount",
+		}),
+	}).Create(&token).Error; err != nil {
+		t.Fatalf("upsert token: %v", err)
+	}
+}
 
 func TestManualVerifyEvmHashAcceptsOptional0x(t *testing.T) {
 	hash := strings.Repeat("a", 64)
@@ -86,6 +110,215 @@ func TestManualVerifyNormalizeTronTxIDAcceptsOptional0x(t *testing.T) {
 	}
 	if _, err = normalizeTronTxID("0x" + strings.Repeat("a", 63)); err == nil {
 		t.Fatal("expected short txid to fail")
+	}
+}
+
+func TestParseManualTonTxRefAcceptsCanonicalLTAndHashOnly(t *testing.T) {
+	receiveRaw := "0:ba295e33b3c4c9b5265aa4ead1166a92931ce9abea120a8c5e91044a1257f89c"
+	hash := strings.Repeat("a", 64)
+
+	ref, err := parseManualTonTxRef("ton:" + receiveRaw + ":123:" + strings.ToUpper(hash))
+	if err != nil {
+		t.Fatalf("parse canonical TON tx ref: %v", err)
+	}
+	if ref.ReceiveRaw != receiveRaw || ref.LT != 123 || ref.HashHex != hash || !ref.HasLT {
+		t.Fatalf("canonical ref = %#v", ref)
+	}
+
+	ref, err = parseManualTonTxRef("456:0X" + strings.ToUpper(hash))
+	if err != nil {
+		t.Fatalf("parse lt:hash TON tx ref: %v", err)
+	}
+	if ref.ReceiveRaw != "" || ref.LT != 456 || ref.HashHex != hash || !ref.HasLT {
+		t.Fatalf("lt:hash ref = %#v", ref)
+	}
+
+	ref, err = parseManualTonTxRef("0X" + strings.ToUpper(hash))
+	if err != nil {
+		t.Fatalf("parse hash-only TON tx ref: %v", err)
+	}
+	if ref.ReceiveRaw != "" || ref.LT != 0 || ref.HashHex != hash || ref.HasLT {
+		t.Fatalf("hash-only ref = %#v", ref)
+	}
+}
+
+type fakeManualTonAPI struct {
+	ton.APIClientWrapped
+	master          *ton.BlockIDExt
+	account         *tlb.Account
+	txs             []*tlb.Transaction
+	getAccountCalls int
+	listCalls       []manualTonListCall
+}
+
+type manualTonListCall struct {
+	limit   uint32
+	lt      uint64
+	hashHex string
+}
+
+func (f *fakeManualTonAPI) CurrentMasterchainInfo(context.Context) (*ton.BlockIDExt, error) {
+	return f.master, nil
+}
+
+func (f *fakeManualTonAPI) WaitForBlock(uint32) ton.APIClientWrapped {
+	return f
+}
+
+func (f *fakeManualTonAPI) GetAccount(context.Context, *ton.BlockIDExt, *address.Address) (*tlb.Account, error) {
+	f.getAccountCalls++
+	if f.account == nil {
+		return &tlb.Account{}, nil
+	}
+	return f.account, nil
+}
+
+func (f *fakeManualTonAPI) ListTransactions(_ context.Context, _ *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
+	f.listCalls = append(f.listCalls, manualTonListCall{
+		limit:   limit,
+		lt:      lt,
+		hashHex: hex.EncodeToString(txHash),
+	})
+	return f.txs, nil
+}
+
+func TestValidateManualTonPaymentWithAPINativeTON(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := dao.Mdb.Model(&mdb.ChainToken{}).
+		Where("network = ? AND symbol = ?", mdb.NetworkTon, "USDT").
+		Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable TON USDT token: %v", err)
+	}
+
+	receive := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	sender := address.NewAddress(0, 0, bytes.Repeat([]byte{0x66}, 32)).Bounce(false).Testnet(false)
+	tx := tonTestInboundTx(t, sender, receive, tlb.MustFromTON("1.23"), nil)
+	order := &mdb.Orders{
+		BaseModel:      mdb.BaseModel{ID: 1, CreatedAt: *carbon.NewTime(carbon.CreateFromTimestampMilli(time.Now().Add(-time.Minute).UnixMilli()))},
+		Network:        mdb.NetworkTon,
+		Token:          "TON",
+		ActualAmount:   1.23,
+		ReceiveAddress: receive.Bounce(false).String(),
+	}
+	api := &fakeManualTonAPI{
+		master: &ton.BlockIDExt{Workchain: address.MasterchainID, Shard: -0x8000000000000000, SeqNo: 9},
+		txs:    []*tlb.Transaction{tx},
+	}
+	ref := manualTonTxRef{LT: tx.LT, HashHex: hex.EncodeToString(tx.Hash), HasLT: true}
+
+	got, err := validateManualTonPaymentWithAPI(context.Background(), api, order, receive, ref)
+	if err != nil {
+		t.Fatalf("validateManualTonPaymentWithAPI(): %v", err)
+	}
+	if api.getAccountCalls != 0 {
+		t.Fatalf("exact TON ref fetched account state %d times, want 0", api.getAccountCalls)
+	}
+	if len(api.listCalls) != 1 {
+		t.Fatalf("ListTransactions calls = %#v, want one exact lookup", api.listCalls)
+	}
+	if call := api.listCalls[0]; call.limit != 1 || call.lt != tx.LT || call.hashHex != hex.EncodeToString(tx.Hash) {
+		t.Fatalf("ListTransactions exact call = %#v, want limit=1 lt/hash from ref", call)
+	}
+	want := TonCanonicalBlockTransactionID(receive.StringRaw(), tx.LT, hex.EncodeToString(tx.Hash))
+	if got != want {
+		t.Fatalf("canonical id = %q, want %q", got, want)
+	}
+}
+
+func TestValidateManualTonPaymentCandidatesUSDTJetton(t *testing.T) {
+	receive := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	sender := address.NewAddress(0, 0, bytes.Repeat([]byte{0x68}, 32)).Bounce(false).Testnet(false)
+	jettonWallet := address.NewAddress(0, 0, bytes.Repeat([]byte{0x69}, 32)).Bounce(false).Testnet(false)
+	body, err := tlb.ToCell(jetton.TransferNotification{
+		QueryID:        7,
+		Amount:         tlb.MustFromNano(big.NewInt(1_000_000), 6),
+		Sender:         sender,
+		ForwardPayload: cell.BeginCell().EndCell(),
+	})
+	if err != nil {
+		t.Fatalf("build jetton notification body: %v", err)
+	}
+	tx := tonTestInboundTx(t, jettonWallet, receive, tlb.FromNanoTONU(1), body)
+	order := &mdb.Orders{
+		BaseModel:      mdb.BaseModel{ID: 1, CreatedAt: *carbon.NewTime(carbon.CreateFromTimestampMilli(time.Now().Add(-time.Minute).UnixMilli()))},
+		Network:        mdb.NetworkTon,
+		Token:          "USDT",
+		ActualAmount:   1,
+		ReceiveAddress: receive.Bounce(false).String(),
+	}
+	state := &manualTonState{
+		jettonWallets: map[string]mdb.ChainToken{
+			addressutil.TonRawAddressObjectKey(jettonWallet): {
+				BaseModel: mdb.BaseModel{ID: 2},
+				Network:   mdb.NetworkTon,
+				Symbol:    "USDT",
+				Decimals:  6,
+				Enabled:   true,
+			},
+		},
+	}
+
+	got, err := validateManualTonPaymentCandidates(order, receive, manualTonTxRef{
+		LT:      tx.LT,
+		HashHex: hex.EncodeToString(tx.Hash),
+		HasLT:   true,
+	}, []*tlb.Transaction{tx}, state)
+	if err != nil {
+		t.Fatalf("validateManualTonPaymentCandidates(): %v", err)
+	}
+	want := TonCanonicalBlockTransactionID(receive.StringRaw(), tx.LT, hex.EncodeToString(tx.Hash))
+	if got != want {
+		t.Fatalf("canonical id = %q, want %q", got, want)
+	}
+}
+
+func TestValidateManualTonPaymentWithAPIRejectsAmbiguousHashOnly(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if err := dao.Mdb.Model(&mdb.ChainToken{}).
+		Where("network = ? AND symbol = ?", mdb.NetworkTon, "USDT").
+		Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable TON USDT token: %v", err)
+	}
+
+	receive := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	sender := address.NewAddress(0, 0, bytes.Repeat([]byte{0x67}, 32)).Bounce(false).Testnet(false)
+	tx1 := tonTestInboundTx(t, sender, receive, tlb.MustFromTON("1.23"), nil)
+	tx2 := tonTestInboundTx(t, sender, receive, tlb.MustFromTON("1.23"), nil)
+	tx2.LT = tx1.LT + 1
+	order := &mdb.Orders{
+		BaseModel:      mdb.BaseModel{ID: 1, CreatedAt: *carbon.NewTime(carbon.CreateFromTimestampMilli(time.Now().Add(-time.Minute).UnixMilli()))},
+		Network:        mdb.NetworkTon,
+		Token:          "TON",
+		ActualAmount:   1.23,
+		ReceiveAddress: receive.Bounce(false).String(),
+	}
+	api := &fakeManualTonAPI{
+		master: &ton.BlockIDExt{Workchain: address.MasterchainID, Shard: -0x8000000000000000, SeqNo: 9},
+		account: &tlb.Account{
+			LastTxLT:   tx2.LT,
+			LastTxHash: tx2.Hash,
+		},
+		txs: []*tlb.Transaction{tx1, tx2},
+	}
+
+	_, err := validateManualTonPaymentWithAPI(context.Background(), api, order, receive, manualTonTxRef{
+		HashHex: hex.EncodeToString(tx1.Hash),
+	})
+	if err == nil || !strings.Contains(err.Error(), "matched multiple") {
+		t.Fatalf("validate ambiguous hash-only error = %v, want multiple-match error", err)
+	}
+	if api.getAccountCalls != 1 {
+		t.Fatalf("hash-only TON ref fetched account state %d times, want 1", api.getAccountCalls)
+	}
+	if len(api.listCalls) != 1 {
+		t.Fatalf("ListTransactions calls = %#v, want one recent lookup", api.listCalls)
+	}
+	if call := api.listCalls[0]; call.limit != 100 || call.lt != tx2.LT || call.hashHex != hex.EncodeToString(tx2.Hash) {
+		t.Fatalf("ListTransactions recent call = %#v, want account last tx cursor", call)
 	}
 }
 
@@ -369,15 +602,13 @@ func TestManualVerifyTronTRC20UsesTransferEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recipient address: %v", err)
 	}
-	if err = dao.Mdb.Create(&mdb.ChainToken{
+	upsertTestChainToken(t, mdb.ChainToken{
 		Network:         mdb.NetworkTron,
 		Symbol:          "USDT",
 		ContractAddress: contractAddress,
 		Decimals:        6,
 		Enabled:         true,
-	}).Error; err != nil {
-		t.Fatalf("create token: %v", err)
-	}
+	})
 
 	rawAmount := big.NewInt(1230000)
 	tx := manualTronTransactionFromCallData(t, contractHex, recipientHex, rawAmount)
@@ -491,15 +722,13 @@ func TestManualVerifyTronPaymentHTTPFlow(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create tron rpc node: %v", err)
 	}
-	if err = dao.Mdb.Create(&mdb.ChainToken{
+	upsertTestChainToken(t, mdb.ChainToken{
 		Network:         mdb.NetworkTron,
 		Symbol:          "USDT",
 		ContractAddress: contractAddress,
 		Decimals:        6,
 		Enabled:         true,
-	}).Error; err != nil {
-		t.Fatalf("create token: %v", err)
-	}
+	})
 	order := &mdb.Orders{
 		TradeId:        "manual-tron-http-flow",
 		OrderId:        "manual-tron-http-flow",

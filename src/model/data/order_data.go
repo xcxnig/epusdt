@@ -8,6 +8,7 @@ import (
 	"github.com/GMWalletApp/epusdt/model/dao"
 	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/model/request"
+	addressutil "github.com/GMWalletApp/epusdt/util/address"
 	"github.com/dromara/carbon/v2"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -39,8 +40,14 @@ func normalizeLockNetwork(network string) string {
 
 func normalizeLockAddress(network, address string) string {
 	address = strings.TrimSpace(address)
-	if isEVMNetwork(normalizeLockNetwork(network)) {
+	network = normalizeLockNetwork(network)
+	if isEVMNetwork(network) {
 		return strings.ToLower(address)
+	}
+	if network == mdb.NetworkTon {
+		if raw, err := addressutil.TonRawAddressKey(address); err == nil {
+			return raw
+		}
 	}
 	return address
 }

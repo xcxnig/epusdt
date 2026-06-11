@@ -132,6 +132,7 @@ func (c *BaseAdminController) CloseOrder(ctx echo.Context) error {
 // callback + notification fire normally.
 // @Summary      Mark order paid
 // @Description  Manually mark a waiting order as paid (operator补单)
+// @Description  TON accepts canonical ton:<receive_raw>:<lt>:<hash>, lt:hash, or a unique recent hash-only reference for the order receive address.
 // @Tags         Admin Orders
 // @Security     AdminJWT
 // @Accept       json
