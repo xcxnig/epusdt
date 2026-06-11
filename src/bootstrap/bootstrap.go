@@ -6,6 +6,7 @@ import (
 	"github.com/GMWalletApp/epusdt/config"
 	"github.com/GMWalletApp/epusdt/model/dao"
 	"github.com/GMWalletApp/epusdt/model/data"
+	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/mq"
 	"github.com/GMWalletApp/epusdt/task"
 	"github.com/GMWalletApp/epusdt/telegram"
@@ -21,6 +22,13 @@ func InitApp() {
 		config.Init()
 		log.Init()
 		dao.Init()
+		logLevel := data.GetSettingString(mdb.SettingKeySystemLogLevel, mdb.SettingDefaultSystemLogLevel)
+		if err := log.SetLevel(logLevel); err != nil {
+			color.Red.Printf("[bootstrap] apply log level setting %q err=%s; fallback=%s\n", logLevel, err, mdb.SettingDefaultSystemLogLevel)
+			if fallbackErr := log.SetLevel(mdb.SettingDefaultSystemLogLevel); fallbackErr != nil {
+				color.Red.Printf("[bootstrap] apply fallback log level err=%s\n", fallbackErr)
+			}
+		}
 		// Wire settings-table lookups into the config package so
 		// GetRateApiUrl / GetUsdtRate can consult admin-configured values.
 		config.SettingsGetString = func(key string) string {

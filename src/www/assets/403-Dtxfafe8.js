@@ -1,1 +1,0 @@
-import{t as e}from"./forbidden-CHYUR1RB.js";var t=e;export{t as component};

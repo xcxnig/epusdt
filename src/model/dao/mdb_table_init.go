@@ -162,6 +162,7 @@ func seedDefaultSettings() {
 	}
 	defaults := []mdb.Setting{
 		{Group: mdb.SettingGroupSystem, Key: mdb.SettingKeyAmountPrecision, Value: "2", Type: mdb.SettingTypeInt},
+		{Group: mdb.SettingGroupSystem, Key: mdb.SettingKeySystemLogLevel, Value: mdb.SettingDefaultSystemLogLevel, Type: mdb.SettingTypeString},
 		{Group: mdb.SettingGroupEpay, Key: mdb.SettingKeyEpayDefaultToken, Value: "usdt", Type: mdb.SettingTypeString},
 		{Group: mdb.SettingGroupEpay, Key: mdb.SettingKeyEpayDefaultCurrency, Value: "cny", Type: mdb.SettingTypeString},
 		{Group: mdb.SettingGroupEpay, Key: mdb.SettingKeyEpayDefaultNetwork, Value: "tron", Type: mdb.SettingTypeString},

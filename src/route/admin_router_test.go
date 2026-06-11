@@ -18,6 +18,7 @@ import (
 	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/model/service"
 	"github.com/GMWalletApp/epusdt/util/constant"
+	appLog "github.com/GMWalletApp/epusdt/util/log"
 	"github.com/labstack/echo/v4"
 )
 
@@ -1438,6 +1439,90 @@ func TestAdminSettings_AmountPrecisionValidationAndListing(t *testing.T) {
 		if result["ok"] != false {
 			t.Fatalf("invalid amount precision result = %v, want ok=false", result)
 		}
+	}
+}
+
+func TestAdminSettings_LogLevelValidationRuntimeUpdateAndReset(t *testing.T) {
+	e, token := setupAdminTestEnv(t)
+	oldLevel := appLog.CurrentLevel()
+	t.Cleanup(func() {
+		_ = appLog.SetLevel(oldLevel)
+	})
+	if err := appLog.SetLevel(mdb.SettingDefaultSystemLogLevel); err != nil {
+		t.Fatalf("reset log level: %v", err)
+	}
+
+	rec := doPutAdmin(e, "/admin/api/v1/settings", map[string]interface{}{
+		"items": []map[string]interface{}{
+			{"group": "system", "key": mdb.SettingKeySystemLogLevel, "value": " DEBUG ", "type": "string"},
+		},
+	}, token)
+	resp := assertOK(t, rec)
+	results, ok := resp["data"].([]interface{})
+	if !ok || len(results) != 1 {
+		t.Fatalf("expected one result, got %T %v", resp["data"], resp["data"])
+	}
+	result, _ := results[0].(map[string]interface{})
+	if result["ok"] != true {
+		t.Fatalf("system.log_level upsert result = %v", result)
+	}
+	if got := appLog.CurrentLevel(); got != "debug" {
+		t.Fatalf("runtime log level = %q, want debug", got)
+	}
+	if got := data.GetSettingString(mdb.SettingKeySystemLogLevel, ""); got != "debug" {
+		t.Fatalf("stored system.log_level = %q, want debug", got)
+	}
+
+	rec = doPutAdmin(e, "/admin/api/v1/settings", map[string]interface{}{
+		"items": []map[string]interface{}{
+			{"group": "system", "key": mdb.SettingKeySystemLogLevel, "value": "fatal", "type": "string"},
+			{"group": "rate", "key": mdb.SettingKeySystemLogLevel, "value": "info", "type": "string"},
+			{"group": "system", "key": mdb.SettingKeySystemLogLevel, "value": "", "type": "string"},
+		},
+	}, token)
+	resp = assertOK(t, rec)
+	results, ok = resp["data"].([]interface{})
+	if !ok || len(results) != 3 {
+		t.Fatalf("expected three results, got %T %v", resp["data"], resp["data"])
+	}
+	for _, item := range results {
+		result, _ := item.(map[string]interface{})
+		if result["ok"] != false {
+			t.Fatalf("invalid system.log_level result = %v, want ok=false", result)
+		}
+	}
+	if got := appLog.CurrentLevel(); got != "debug" {
+		t.Fatalf("invalid upsert changed runtime log level to %q", got)
+	}
+
+	rec = doDeleteAdmin(e, "/admin/api/v1/settings/"+mdb.SettingKeySystemLogLevel, token)
+	assertOK(t, rec)
+	if got := appLog.CurrentLevel(); got != mdb.SettingDefaultSystemLogLevel {
+		t.Fatalf("runtime log level after delete = %q, want %q", got, mdb.SettingDefaultSystemLogLevel)
+	}
+	if got := data.GetSettingString(mdb.SettingKeySystemLogLevel, mdb.SettingDefaultSystemLogLevel); got != mdb.SettingDefaultSystemLogLevel {
+		t.Fatalf("deleted system.log_level fallback = %q, want %q", got, mdb.SettingDefaultSystemLogLevel)
+	}
+
+	rec = doPutAdmin(e, "/admin/api/v1/settings", map[string]interface{}{
+		"items": []map[string]interface{}{
+			{"group": "system", "key": mdb.SettingKeySystemLogLevel, "value": "warn", "type": "string"},
+		},
+	}, token)
+	assertOK(t, rec)
+	if got := appLog.CurrentLevel(); got != "warn" {
+		t.Fatalf("runtime log level after restore = %q, want warn", got)
+	}
+
+	var restored mdb.Setting
+	if err := dao.Mdb.Unscoped().Where("`key` = ?", mdb.SettingKeySystemLogLevel).Take(&restored).Error; err != nil {
+		t.Fatalf("load restored system.log_level unscoped: %v", err)
+	}
+	if restored.DeletedAt.Valid {
+		t.Fatalf("restored system.log_level still has deleted_at=%v", restored.DeletedAt)
+	}
+	if restored.Value != "warn" {
+		t.Fatalf("restored system.log_level value = %q, want warn", restored.Value)
 	}
 }
 

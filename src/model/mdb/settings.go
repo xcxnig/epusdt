@@ -4,10 +4,10 @@ package mdb
 // Groups: brand, rate, system, epay, okpay. Merchant credentials (pid +
 // secret_key) live in the api_keys table; notification configs live in
 // NotificationChannel.
-// Default rows for the epay/okpay groups are seeded on first startup (see
-// model/dao/mdb_table_init.go seedDefaultSettings). All other groups start
-// empty and fall back to hardcoded defaults until an admin sets them.
-// Only exception: system.jwt_secret is auto-generated on first startup.
+// Default rows for the system/epay/okpay groups are seeded on first startup
+// (see model/dao/mdb_table_init.go seedDefaultSettings). Other groups start
+// empty and fall back to hardcoded defaults until an admin sets them. The
+// system.jwt_secret key is auto-generated on first startup.
 const (
 	SettingGroupBrand  = "brand"
 	SettingGroupRate   = "rate"
@@ -31,6 +31,7 @@ const (
 	SettingKeyInitAdminPasswordChanged = "system.init_admin_password_changed"
 	SettingKeyOrderExpiration          = "system.order_expiration_time"
 	SettingKeyAmountPrecision          = "system.amount_precision"
+	SettingKeySystemLogLevel           = "system.log_level"
 	SettingKeyBrandCheckoutName        = "brand.checkout_name"
 	SettingKeyBrandSiteName            = "brand.site_name"
 	SettingKeyBrandLogoUrl             = "brand.logo_url"
@@ -60,6 +61,10 @@ const (
 	SettingKeyOkPayReturnURL      = "okpay.return_url"
 	SettingKeyOkPayTimeoutSeconds = "okpay.timeout_seconds"
 	SettingKeyOkPayAllowTokens    = "okpay.allow_tokens"
+)
+
+const (
+	SettingDefaultSystemLogLevel = "error"
 )
 
 type Setting struct {

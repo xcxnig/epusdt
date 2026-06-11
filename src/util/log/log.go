@@ -2,6 +2,9 @@ package log
 
 import (
 	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/GMWalletApp/epusdt/config"
 	"github.com/natefinch/lumberjack"
 	"github.com/spf13/viper"
@@ -13,11 +16,16 @@ import (
 
 var Sugar *zap.SugaredLogger
 
+var (
+	atomicLevel = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+	levelMu     sync.Mutex
+)
+
 func Init() {
-	level := getLogLevel()
+	atomicLevel.SetLevel(getLogLevel())
 	core := zapcore.NewTee(
-		zapcore.NewCore(getConsoleEncoder(), getConsoleWriter(), level),
-		zapcore.NewCore(getFileEncoder(), getFileWriter(), level),
+		zapcore.NewCore(getConsoleEncoder(), getConsoleWriter(), atomicLevel),
+		zapcore.NewCore(getFileEncoder(), getFileWriter(), atomicLevel),
 	)
 	logger := zap.New(core, zap.AddCaller())
 	Sugar = logger.Sugar()
@@ -56,14 +64,75 @@ func getConsoleWriter() zapcore.WriteSyncer {
 }
 
 func getLogLevel() zapcore.Level {
-	switch config.LogLevel {
-	case "debug":
-		return zapcore.DebugLevel
-	case "warn":
-		return zapcore.WarnLevel
-	case "error":
-		return zapcore.ErrorLevel
-	default:
+	level, _, err := parseLevel(config.LogLevel)
+	if err != nil {
 		return zapcore.InfoLevel
+	}
+	return level
+}
+
+func SetLevel(level string) error {
+	nextLevel, normalized, err := parseLevel(level)
+	if err != nil {
+		return err
+	}
+
+	levelMu.Lock()
+	defer levelMu.Unlock()
+
+	currentLevel := atomicLevel.Level()
+	current := levelToString(currentLevel)
+	if current == normalized {
+		return nil
+	}
+
+	message := fmt.Sprintf("[log] level changed: %s -> %s", current, normalized)
+	if Sugar != nil && currentLevel <= zapcore.WarnLevel {
+		Sugar.Warn(message)
+	}
+	atomicLevel.SetLevel(nextLevel)
+	if Sugar != nil && currentLevel > zapcore.WarnLevel {
+		Sugar.Warn(message)
+	}
+	return nil
+}
+
+func CurrentLevel() string {
+	return levelToString(atomicLevel.Level())
+}
+
+func NormalizeLevel(level string) (string, error) {
+	_, normalized, err := parseLevel(level)
+	return normalized, err
+}
+
+func parseLevel(level string) (zapcore.Level, string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(level))
+	switch normalized {
+	case "debug":
+		return zapcore.DebugLevel, normalized, nil
+	case "info":
+		return zapcore.InfoLevel, normalized, nil
+	case "warn":
+		return zapcore.WarnLevel, normalized, nil
+	case "error":
+		return zapcore.ErrorLevel, normalized, nil
+	default:
+		return zapcore.InfoLevel, "", fmt.Errorf("unsupported log level %q", level)
+	}
+}
+
+func levelToString(level zapcore.Level) string {
+	switch level {
+	case zapcore.DebugLevel:
+		return "debug"
+	case zapcore.InfoLevel:
+		return "info"
+	case zapcore.WarnLevel:
+		return "warn"
+	case zapcore.ErrorLevel:
+		return "error"
+	default:
+		return level.String()
 	}
 }

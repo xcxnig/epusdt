@@ -11,6 +11,7 @@ import (
 	"github.com/GMWalletApp/epusdt/model/mdb"
 	"github.com/GMWalletApp/epusdt/telegram"
 	"github.com/GMWalletApp/epusdt/util/constant"
+	appLog "github.com/GMWalletApp/epusdt/util/log"
 	"github.com/GMWalletApp/epusdt/util/security"
 	"github.com/labstack/echo/v4"
 )
@@ -54,6 +55,7 @@ import (
 //   - group=system:
 //     system.order_expiration_time (int) — order expiry in minutes
 //     system.amount_precision      (int) — payment amount precision, 2-6 decimals (default 2)
+//     system.log_level             (string) — runtime log level: debug, info, warn, error (default error)
 type SettingUpsertItem struct {
 	Group string      `json:"group" enums:"brand,rate,system,epay,okpay" example:"epay"`
 	Key   string      `json:"key" example:"epay.default_network"`
@@ -97,7 +99,7 @@ func (c *BaseAdminController) ListSettings(ctx echo.Context) error {
 // @Description  okpay group keys: okpay.enabled, okpay.shop_id, okpay.shop_token, okpay.api_url, okpay.callback_url, okpay.return_url, okpay.timeout_seconds, okpay.allow_tokens.
 // @Description  rate group keys: rate.forced_rate_list (JSON map, e.g. {"cny":{"usdt":0.14635,"ton":0.5}}; base/coin keys are normalized to lowercase), rate.api_url, rate.adjust_percent, rate.okx_c2c_enabled.
 // @Description  brand group keys: brand.checkout_name, brand.logo_url, brand.site_title, brand.success_copy, brand.support_url, brand.background_color, brand.background_image_url. Legacy aliases brand.site_name, brand.page_title and brand.pay_success_text are also supported.
-// @Description  system group keys: system.order_expiration_time, system.amount_precision (int, 2-6, default 2).
+// @Description  system group keys: system.order_expiration_time, system.amount_precision (int, 2-6, default 2), system.log_level (debug|info|warn|error, default error).
 // @Tags         Admin Settings
 // @Security     AdminJWT
 // @Accept       json
@@ -149,9 +151,19 @@ func (c *BaseAdminController) UpsertSettings(ctx echo.Context) error {
 			item.Group = mdb.SettingGroupRate
 			item.Type = mdb.SettingTypeJSON
 		}
+		if key == mdb.SettingKeySystemLogLevel {
+			item.Group = mdb.SettingGroupSystem
+			item.Type = mdb.SettingTypeString
+		}
 		if err := data.SetSetting(item.Group, key, value, item.Type); err != nil {
 			out = append(out, errorResult(key, err))
 			continue
+		}
+		if key == mdb.SettingKeySystemLogLevel {
+			if err := appLog.SetLevel(value); err != nil {
+				out = append(out, errorResult(key, err))
+				continue
+			}
 		}
 		out = append(out, result{Key: key, OK: true})
 	}
@@ -218,6 +230,15 @@ func normalizeAndValidateSettingItem(group, key, value string) (string, error) {
 		if err := security.ValidatePublicHTTPURL(value); err != nil {
 			return value, fmt.Errorf("%s invalid: %w", key, err)
 		}
+	case mdb.SettingKeySystemLogLevel:
+		if strings.ToLower(strings.TrimSpace(group)) != mdb.SettingGroupSystem {
+			return value, fmt.Errorf("%s must use group %s", key, mdb.SettingGroupSystem)
+		}
+		normalized, err := appLog.NormalizeLevel(value)
+		if err != nil {
+			return value, err
+		}
+		return normalized, nil
 	}
 	return value, nil
 }
@@ -274,7 +295,7 @@ func normalizeForcedRateListSetting(group, key, value string) (string, error) {
 // DeleteSetting removes one row. The next read of that key will fall
 // back to the hardcoded default (see settings_data.GetSetting*).
 // @Summary      Delete setting
-// @Description  Remove a setting by key (falls back to default)
+// @Description  Remove a setting by key (falls back to default). Deleting system.log_level immediately resets runtime logging to error.
 // @Tags         Admin Settings
 // @Security     AdminJWT
 // @Produce      json
@@ -289,6 +310,11 @@ func (c *BaseAdminController) DeleteSetting(ctx echo.Context) error {
 	}
 	if err := data.DeleteSetting(key); err != nil {
 		return c.FailJson(ctx, err)
+	}
+	if key == mdb.SettingKeySystemLogLevel {
+		if err := appLog.SetLevel(mdb.SettingDefaultSystemLogLevel); err != nil {
+			return c.FailJson(ctx, err)
+		}
 	}
 	return c.SucJson(ctx, nil)
 }

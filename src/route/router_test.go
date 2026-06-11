@@ -26,6 +26,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 	"gorm.io/gorm/clause"
 )
 
@@ -46,8 +47,13 @@ func setupTestEnv(t *testing.T) *echo.Echo {
 	viper.Set("log_save_path", tmpDir)
 	viper.Set("sqlite_database_filename", tmpDir+"/test.db")
 	viper.Set("runtime_sqlite_filename", tmpDir+"/runtime.db")
+	config.LogLevel = "info"
+	config.LogSavePath = tmpDir
 
-	log.Init()
+	log.Sugar = zap.NewNop().Sugar()
+	if err := log.SetLevel(config.LogLevel); err != nil {
+		t.Fatalf("set test log level: %v", err)
+	}
 
 	// init config paths
 	os.Setenv("EPUSDT_CONFIG", tmpDir)
