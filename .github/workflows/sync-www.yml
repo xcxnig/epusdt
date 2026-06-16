@@ -23,8 +23,7 @@ jobs:
     env:
       FRONTEND_REPOSITORY: ${{ vars.WWW_FRONTEND_REPOSITORY }}
       FRONTEND_REF: ${{ vars.WWW_FRONTEND_REF }}
-      FRONTEND_BUILD_DIR: ${{ vars.WWW_FRONTEND_BUILD_DIR || 'dist' }}
-      FRONTEND_DIR: epusdt-admin-web
+      FRONTEND_BUILD_DIR: ${{ vars.WWW_FRONTEND_BUILD_DIR }}
       FRONTEND_TOKEN: ${{ secrets.WWW_FRONTEND_TOKEN }}
       WWW_TARGET_DIR: src/www
 
@@ -38,7 +37,15 @@ jobs:
       - name: Validate Configuration
         run: |
           if [[ -z "$FRONTEND_REPOSITORY" ]]; then
-            echo "Frontend repository is empty"
+            echo "Set repository variable WWW_FRONTEND_REPOSITORY, for example owner/repo"
+            exit 1
+          fi
+          if [[ -z "$FRONTEND_REF" ]]; then
+            echo "Set repository variable WWW_FRONTEND_REF, for example main"
+            exit 1
+          fi
+          if [[ -z "$FRONTEND_BUILD_DIR" ]]; then
+            echo "Set repository variable WWW_FRONTEND_BUILD_DIR, for example dist"
             exit 1
           fi
           if [[ -z "$FRONTEND_TOKEN" ]]; then
@@ -48,7 +55,8 @@ jobs:
 
       - name: Clone Frontend
         run: |
-          frontend_path="$RUNNER_TEMP/$FRONTEND_DIR"
+          frontend_name="${FRONTEND_REPOSITORY##*/}"
+          frontend_path="$RUNNER_TEMP/$frontend_name"
           git clone \
             --depth=1 \
             --branch "$FRONTEND_REF" \
@@ -60,13 +68,15 @@ jobs:
 
       - name: Build Frontend
         run: |
-          cd "$RUNNER_TEMP/$FRONTEND_DIR"
+          frontend_name="${FRONTEND_REPOSITORY##*/}"
+          cd "$RUNNER_TEMP/$frontend_name"
           bun install
           bun run build
 
       - name: Replace src/www
         run: |
-          cd "$RUNNER_TEMP/$FRONTEND_DIR"
+          frontend_name="${FRONTEND_REPOSITORY##*/}"
+          cd "$RUNNER_TEMP/$frontend_name"
           if [[ ! -d "$FRONTEND_BUILD_DIR" ]]; then
             echo "Frontend build output does not exist: $FRONTEND_BUILD_DIR"
             exit 1
