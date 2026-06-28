@@ -441,9 +441,9 @@ function epaySign(array $params, string $secretKey): string
 | `notify_url` | query/form | string | 是 | 异步回调地址。 |
 | `return_url` | query/form | string | 否 | 支付完成后的同步跳转地址。 |
 | `name` | query/form | string | 否 | 商品/订单名称。 |
-| `type` | query/form | string | 否 | 兼容字段，如 `alipay`。创建订单时不决定实际链上币种。 |
-| `token` | query/form | string | 否 | 可选收款币种。优先级高于后台 `epay.default_token`；传了就必须参与 EPay 签名。 |
-| `network` | query/form | string | 否 | 可选收款网络。优先级高于后台 `epay.default_network`；传了就必须参与 EPay 签名。 |
+| `type` | query/form | string | 否 | 仅支持空值、`alipay`，或当前已启用并可收款的 `token.network` selector（如 `usdt.tron`）。推荐使用小写 `alipay`。 |
+| `token` | query/form | string | 否 | 可选收款币种。仅在 `type` 不是命中的 selector 时参与解析；传了就必须参与 EPay 签名。 |
+| `network` | query/form | string | 否 | 可选收款网络。仅在 `type` 不是命中的 selector 时参与解析；传了就必须参与 EPay 签名。 |
 | `currency` | query/form | string | 否 | 可选法币币种。优先级高于后台 `epay.default_currency`；传了就必须参与 EPay 签名。 |
 | `sign` | query/form | string | 是 | EPay 签名。 |
 | `sign_type` | query/form | string | 否 | 通常为 `MD5`。 |
@@ -466,13 +466,16 @@ money=100&name=VIP&notify_url=https://merchant.example/notify&out_trade_no=ORD20
 sign=b865b0acbb2b01554c35a1bd33351452
 ```
 
-EPay 接口解析 `token/network/currency` 的优先级：
+EPay 接口解析 `type/token/network/currency` 的规则：
 
-- `token`：请求参数 `token` > 数据库 `epay.default_token` > 空。
-- `network`：请求参数 `network` > 数据库 `epay.default_network` > 空。
-- `currency`：请求参数 `currency` > 数据库 `epay.default_currency` > `cny`。
-- 最终 `token/network` 同时有值时，创建具体链上订单；同时为空时，创建状态 `4` 占位订单；只缺一个时返回参数错误。
-- 服务端会在 EPay 签名校验通过后内部注入 `payment_type=Epay`，该字段不参与 EPay 入站签名；但请求里显式传入的 `token/network/currency` 属于原始 EPay 参数，必须参与签名。
+- `type` 只接受三类输入：空值、`alipay`、命中的 `token.network` selector。
+- `type=token.network` 且命中当前已启用支付资产时，会直接确定本次订单的 `token/network`，并覆盖请求参数里的 `token/network` 以及后台 `epay.default_token` / `epay.default_network`。
+- `type` 非空但既不是命中的 selector，也不是 `alipay` 时，直接返回 `10009 invalid params`。例如 `usdt-tron`、未启用的 `usdc.tron` 都会被拒绝。
+- `type` 为空或为 `alipay` 时，`token/network` 继续走原有解析：先看请求参数，再分别用数据库 `epay.default_token` / `epay.default_network` 补齐。
+- `currency` 解析不受 selector 影响：请求参数 `currency` > 数据库 `epay.default_currency` > `cny`。
+- 最终解析结果里，`token/network` 同时有值时创建具体链上订单；同时为空时创建状态 `4` 占位订单；最终只缺一个时返回参数错误。
+- 这意味着“请求里只传了一个值”不一定报错；如果另一个值能被 default 补齐，仍会成功。只有最终解析后仍然只剩一个值，才返回 `10009`。
+- 服务端会在 EPay 签名校验通过后内部注入 `payment_type=Epay`，该字段不参与 EPay 入站签名；但请求里显式传入的 `type/token/network/currency` 仍属于原始 EPay 参数，必须参与签名。
 
 后台默认配置可通过 `/payments/gmpay/v1/config` 的 `epay` 字段查看；新安装默认只预置 `epay.default_currency=cny`，`epay.default_token` 和 `epay.default_network` 为空，因此 EPay 未显式传 token/network 时会创建状态 `4` 占位订单。已有数据库的配置不会被 seed 覆盖，删除或置空 `epay.default_token` 和 `epay.default_network` 后，这两个字段会返回空字符串。
 
@@ -519,6 +522,8 @@ GMPay 回调验签方式与创建订单一致，但排除 `signature` 字段。
 通过 EPay 兼容接口创建的订单，会使用 GET 请求回调 `notify_url`，参数如下：
 
 > EPay 回调会把 `pid` 输出为数字；使用 EPay 兼容接口或 `payment_type=Epay` 时，请确保 API Key 的 PID 是数字。
+>
+> `type` 出站时使用订单里保存的请求值。当前主分支正常入站能保存下来的只会是 `alipay` 或命中的 `token.network` selector；如果入站请求没传 `type`，出站才回退为 `alipay`。
 
 ```text
 pid=1000

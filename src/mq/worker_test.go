@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -631,7 +630,7 @@ func TestSendOrderCallbackEpayUsesApiKeySecretByPid(t *testing.T) {
 	}
 }
 
-func TestSendOrderCallbackEpayPreservesStoredTypeValues(t *testing.T) {
+func TestSendOrderCallbackEpayPreservesStoredAlipayType(t *testing.T) {
 	cleanup := testutil.SetupTestDatabases(t)
 	defer cleanup()
 
@@ -645,73 +644,60 @@ func TestSendOrderCallbackEpayPreservesStoredTypeValues(t *testing.T) {
 		t.Fatalf("create epay api key: %v", err)
 	}
 
-	cases := []struct {
-		name     string
-		epayType string
-	}{
-		{name: "alipay", epayType: "alipay"},
-		{name: "non_selector", epayType: "usdt-tron"},
-		{name: "unsupported_selector", epayType: "usdc.tron"},
+	formPayload := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		for k, v := range r.Form {
+			if len(v) > 0 {
+				formPayload[k] = v[0]
+			}
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer server.Close()
+
+	order := &mdb.Orders{
+		TradeId:            "trade_epay_type_case_alipay",
+		OrderId:            "order_epay_type_case_alipay",
+		Amount:             1,
+		Currency:           "CNY",
+		ActualAmount:       1,
+		ReceiveAddress:     "wallet_epay_type_case",
+		Token:              "USDT",
+		Name:               "VIP",
+		Status:             mdb.StatusPaySuccess,
+		NotifyUrl:          server.URL,
+		BlockTransactionId: "block_epay_type_case_alipay",
+		EpayType:           "alipay",
+		PaymentType:        "epay",
+		ApiKeyID:           key.ID,
 	}
 
-	for idx, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			formPayload := map[string]string{}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if err := r.ParseForm(); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				for k, v := range r.Form {
-					if len(v) > 0 {
-						formPayload[k] = v[0]
-					}
-				}
-				_, _ = io.WriteString(w, "ok")
-			}))
-			defer server.Close()
+	if err := sendOrderCallback(order); err != nil {
+		t.Fatalf("send epay callback: %v", err)
+	}
+	if got := formPayload["type"]; got != "alipay" {
+		t.Fatalf("type = %q, want alipay", got)
+	}
 
-			order := &mdb.Orders{
-				TradeId:            "trade_epay_type_case_" + strconv.Itoa(idx),
-				OrderId:            "order_epay_type_case_" + strconv.Itoa(idx),
-				Amount:             1,
-				Currency:           "CNY",
-				ActualAmount:       1,
-				ReceiveAddress:     "wallet_epay_type_case",
-				Token:              "USDT",
-				Name:               "VIP",
-				Status:             mdb.StatusPaySuccess,
-				NotifyUrl:          server.URL,
-				BlockTransactionId: "block_epay_type_case_" + strconv.Itoa(idx),
-				EpayType:           tc.epayType,
-				PaymentType:        "epay",
-				ApiKeyID:           key.ID,
-			}
-
-			if err := sendOrderCallback(order); err != nil {
-				t.Fatalf("send epay callback: %v", err)
-			}
-			if got := formPayload["type"]; got != tc.epayType {
-				t.Fatalf("type = %q, want %q", got, tc.epayType)
-			}
-
-			signParams := map[string]interface{}{
-				"pid":          formPayload["pid"],
-				"trade_no":     formPayload["trade_no"],
-				"out_trade_no": formPayload["out_trade_no"],
-				"type":         formPayload["type"],
-				"name":         formPayload["name"],
-				"money":        formPayload["money"],
-				"trade_status": formPayload["trade_status"],
-			}
-			calcSig, err := sign.Get(signParams, key.SecretKey)
-			if err != nil {
-				t.Fatalf("calc epay signature: %v", err)
-			}
-			if got := formPayload["sign"]; got != calcSig {
-				t.Fatalf("sign = %q, want %q", got, calcSig)
-			}
-		})
+	signParams := map[string]interface{}{
+		"pid":          formPayload["pid"],
+		"trade_no":     formPayload["trade_no"],
+		"out_trade_no": formPayload["out_trade_no"],
+		"type":         formPayload["type"],
+		"name":         formPayload["name"],
+		"money":        formPayload["money"],
+		"trade_status": formPayload["trade_status"],
+	}
+	calcSig, err := sign.Get(signParams, key.SecretKey)
+	if err != nil {
+		t.Fatalf("calc epay signature: %v", err)
+	}
+	if got := formPayload["sign"]; got != calcSig {
+		t.Fatalf("sign = %q, want %q", got, calcSig)
 	}
 }
 

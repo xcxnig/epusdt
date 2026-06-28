@@ -105,9 +105,9 @@ func (c *BaseCommController) SwitchNetwork(ctx echo.Context) (err error) {
 // the canonical form — the GET variant is identical save the transport.
 // @Summary      Create transaction and redirect (EPAY compat)
 // @Description  Legacy EPAY-style endpoint. Accepts GET (querystring) and POST (form). On success, 302 redirects to /pay/checkout-counter/{trade_id}. Signature uses MD5 of sorted params + secret_key of the api_keys row matching the submitted pid.
-// @Description  After signature verification, token/network resolution is: supported type=token.network selector (for example usdt.tron) first; otherwise request token/network; otherwise epay.default_token / epay.default_network. If token and network are still both empty, the order is created as status=4 placeholder. Supplying only one of token/network remains invalid.
+// @Description  After signature verification, type accepts only either alipay or a supported type=token.network selector (for example usdt.tron). Token/network resolution is: supported selector first; otherwise request token/network; otherwise epay.default_token / epay.default_network. If token and network are still both empty, the order is created as status=4 placeholder. Supplying only one of token/network remains invalid.
 // @Description  Currency resolution is unchanged: request currency -> epay.default_currency -> cny. Supported type selectors bypass only token/network defaults, not currency fallback.
-// @Description  Success return/notify currently use the stored request type when present, and fall back to alipay only when type was missing. The server injects internal payment_type=Epay after EPay signature verification; merchants do not send GMPay payment_type to this endpoint.
+// @Description  Success return/notify reuse the stored request type. On this branch that means either alipay or a supported token.network selector; when the request omitted type, outbound fallback remains alipay. The server injects internal payment_type=Epay after EPay signature verification; merchants do not send GMPay payment_type to this endpoint.
 // @Tags         Payment
 // @Accept       x-www-form-urlencoded
 // @Produce      html
@@ -117,7 +117,7 @@ func (c *BaseCommController) SwitchNetwork(ctx echo.Context) (err error) {
 // @Param        notify_url query string false "Callback URL (GET query)"
 // @Param        return_url query string false "Redirect URL after payment (GET query)"
 // @Param        name query string false "Order name (GET query)"
-// @Param        type query string false "Opaque merchant type or supported token.network selector such as alipay or usdt.tron (GET query)"
+// @Param        type query string false "Either alipay or a supported token.network selector such as usdt.tron (GET query)"
 // @Param        sign query string false "MD5 signature (GET query)"
 // @Param        sign_type query string false "Signature type (MD5, GET query)"
 // @Param        pid formData integer true "API key PID"
@@ -126,7 +126,7 @@ func (c *BaseCommController) SwitchNetwork(ctx echo.Context) (err error) {
 // @Param        notify_url formData string true "Callback URL"
 // @Param        return_url formData string false "Redirect URL after payment"
 // @Param        name formData string false "Order name"
-// @Param        type formData string false "Opaque merchant type or supported token.network selector such as alipay or usdt.tron"
+// @Param        type formData string false "Either alipay or a supported token.network selector such as usdt.tron"
 // @Param        sign formData string true "MD5 signature"
 // @Param        sign_type formData string false "Signature type (MD5)"
 // @Success      302 "Redirect to checkout counter"

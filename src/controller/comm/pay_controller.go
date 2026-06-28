@@ -36,7 +36,7 @@ func (c *BaseCommController) CheckoutCounter(ctx echo.Context) (err error) {
 // Non-EPay or not-yet-paid orders are sent back to the checkout counter.
 // @Summary      Return to merchant (EPAY compat)
 // @Description  Browser-facing success return hop for EPay orders. Paid EPay orders are redirected to the merchant return_url with signed legacy EPay query params. Orders that are not EPay or not yet paid are redirected back to the checkout counter.
-// @Description  The signed query params currently use the stored request type when present; otherwise type=alipay is returned for compatibility.
+// @Description  The signed query params reuse the stored request type. On this branch that means either alipay or a supported token.network selector; if the original request omitted type, type=alipay is returned for compatibility.
 // @Description  This route also returns explicit business errors when the merchant return_url is missing, the order API key is unavailable, or EPay signature construction fails.
 // @Tags         Payment
 // @Produce      html

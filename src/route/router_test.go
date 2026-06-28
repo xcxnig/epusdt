@@ -1471,7 +1471,46 @@ func TestEpaySubmitPhpWithoutTokenNetworkDefaultsCreatesPlaceholder(t *testing.T
 	}
 }
 
-func TestEpaySubmitPhpNonSelectorTypeKeepsOldLogic(t *testing.T) {
+func TestEpaySubmitPhpWithoutTypeKeepsCurrentBehavior(t *testing.T) {
+	e := setupTestEnv(t)
+
+	if err := data.SetSetting(mdb.SettingGroupEpay, mdb.SettingKeyEpayDefaultToken, "usdt", mdb.SettingTypeString); err != nil {
+		t.Fatalf("seed epay.default_token: %v", err)
+	}
+	if err := data.SetSetting(mdb.SettingGroupEpay, mdb.SettingKeyEpayDefaultNetwork, "tron", mdb.SettingTypeString); err != nil {
+		t.Fatalf("seed epay.default_network: %v", err)
+	}
+
+	values := signEpayValues(url.Values{
+		"pid":          {"1"},
+		"name":         {"epay-empty-type-001"},
+		"money":        {"1.00"},
+		"out_trade_no": {"epay-empty-type-001"},
+		"notify_url":   {"https://93.184.216.34/notify"},
+		"return_url":   {"http://localhost/return"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/payments/epay/v1/order/create-transaction/submit.php?"+values.Encode(), nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	tradeID := strings.TrimPrefix(rec.Header().Get("Location"), "/pay/checkout-counter/")
+	order, err := data.GetOrderInfoByTradeId(tradeID)
+	if err != nil {
+		t.Fatalf("reload epay empty-type order: %v", err)
+	}
+	if order.Token != "USDT" || order.Network != mdb.NetworkTron || order.ReceiveAddress != "TTestTronAddress001" {
+		t.Fatalf("empty-type order fields = token %q network %q address %q", order.Token, order.Network, order.ReceiveAddress)
+	}
+	if order.EpayType != "" {
+		t.Fatalf("epay_type = %q, want empty", order.EpayType)
+	}
+}
+
+func TestEpaySubmitPhpRejectsNonSelectorType(t *testing.T) {
 	e := setupTestEnv(t)
 
 	if err := data.SetSetting(mdb.SettingGroupEpay, mdb.SettingKeyEpayDefaultToken, "usdt", mdb.SettingTypeString); err != nil {
@@ -1495,23 +1534,16 @@ func TestEpaySubmitPhpNonSelectorTypeKeepsOldLogic(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected 302, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	tradeID := strings.TrimPrefix(rec.Header().Get("Location"), "/pay/checkout-counter/")
-	order, err := data.GetOrderInfoByTradeId(tradeID)
-	if err != nil {
-		t.Fatalf("reload epay non-selector order: %v", err)
-	}
-	if order.Token != "USDT" || order.Network != mdb.NetworkTron || order.ReceiveAddress != "TTestTronAddress001" {
-		t.Fatalf("non-selector order fields = token %q network %q address %q", order.Token, order.Network, order.ReceiveAddress)
-	}
-	if order.EpayType != "usdt-tron" {
-		t.Fatalf("epay_type = %q, want usdt-tron", order.EpayType)
+	resp := parseResp(t, rec)
+	if got := int(resp["status_code"].(float64)); got != 10009 {
+		t.Fatalf("status_code = %d, want 10009", got)
 	}
 }
 
-func TestEpaySubmitPhpUnsupportedSelectorFallsBackToOldLogic(t *testing.T) {
+func TestEpaySubmitPhpRejectsUnsupportedSelectorType(t *testing.T) {
 	e := setupTestEnv(t)
 
 	if err := data.SetSetting(mdb.SettingGroupEpay, mdb.SettingKeyEpayDefaultToken, "usdt", mdb.SettingTypeString); err != nil {
@@ -1535,19 +1567,12 @@ func TestEpaySubmitPhpUnsupportedSelectorFallsBackToOldLogic(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected 302, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	tradeID := strings.TrimPrefix(rec.Header().Get("Location"), "/pay/checkout-counter/")
-	order, err := data.GetOrderInfoByTradeId(tradeID)
-	if err != nil {
-		t.Fatalf("reload epay unsupported selector order: %v", err)
-	}
-	if order.Token != "USDT" || order.Network != mdb.NetworkTron || order.ReceiveAddress != "TTestTronAddress001" {
-		t.Fatalf("unsupported selector order fields = token %q network %q address %q", order.Token, order.Network, order.ReceiveAddress)
-	}
-	if order.EpayType != "usdc.tron" {
-		t.Fatalf("epay_type = %q, want usdc.tron", order.EpayType)
+	resp := parseResp(t, rec)
+	if got := int(resp["status_code"].(float64)); got != 10009 {
+		t.Fatalf("status_code = %d, want 10009", got)
 	}
 }
 
@@ -1894,66 +1919,6 @@ func TestPayReturn_PaidEpayRedirectsWithOriginalType(t *testing.T) {
 	}
 	if got := targetURL.Query().Get("type"); got != "usdt.tron" {
 		t.Fatalf("type = %q, want usdt.tron", got)
-	}
-}
-
-func TestPayReturn_PaidEpayRedirectsWithNonSelectorType(t *testing.T) {
-	e := setupTestEnv(t)
-	tradeID := mustCreateEPayOrder(t, e, "epay-return-non-selector-001", "https://merchant.example/return", url.Values{
-		"type":     {"usdt-tron"},
-		"token":    {"usdt"},
-		"network":  {"tron"},
-		"currency": {"cny"},
-	})
-	if err := dao.Mdb.Model(&mdb.Orders{}).
-		Where("trade_id = ?", tradeID).
-		Update("status", mdb.StatusPaySuccess).Error; err != nil {
-		t.Fatalf("mark order paid: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/pay/return/"+tradeID, nil)
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, req)
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected 302, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	targetURL, err := url.Parse(rec.Header().Get("Location"))
-	if err != nil {
-		t.Fatalf("parse redirect location: %v", err)
-	}
-	if got := targetURL.Query().Get("type"); got != "usdt-tron" {
-		t.Fatalf("type = %q, want usdt-tron", got)
-	}
-}
-
-func TestPayReturn_PaidEpayRedirectsWithUnsupportedSelectorType(t *testing.T) {
-	e := setupTestEnv(t)
-	tradeID := mustCreateEPayOrder(t, e, "epay-return-unsel-001", "https://merchant.example/return", url.Values{
-		"type":     {"usdc.tron"},
-		"token":    {"usdt"},
-		"network":  {"tron"},
-		"currency": {"cny"},
-	})
-	if err := dao.Mdb.Model(&mdb.Orders{}).
-		Where("trade_id = ?", tradeID).
-		Update("status", mdb.StatusPaySuccess).Error; err != nil {
-		t.Fatalf("mark order paid: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/pay/return/"+tradeID, nil)
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, req)
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected 302, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	targetURL, err := url.Parse(rec.Header().Get("Location"))
-	if err != nil {
-		t.Fatalf("parse redirect location: %v", err)
-	}
-	if got := targetURL.Query().Get("type"); got != "usdc.tron" {
-		t.Fatalf("type = %q, want usdc.tron", got)
 	}
 }
 

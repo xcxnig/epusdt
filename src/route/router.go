@@ -23,8 +23,9 @@ import (
 )
 
 // resolveEPayTypeSelector only claims the type as a selector when it maps to a
-// currently supported payment asset; otherwise the caller should keep the
-// legacy token/network/default resolution and treat type as opaque.
+// currently supported payment asset. Non-selector values are handled by the
+// caller, which now only accepts empty type or alipay before falling back to
+// request token/network/default resolution.
 func resolveEPayTypeSelector(rawType string) (string, string, bool, error) {
 	rawType = strings.TrimSpace(rawType)
 	if rawType == "" || strings.Count(rawType, ".") != 1 {
@@ -167,6 +168,9 @@ func RegisterRoute(e *echo.Echo) {
 		selectorToken, selectorNetwork, selectorMatched, err := resolveEPayTypeSelector(epayType)
 		if err != nil {
 			return comm.Ctrl.FailJson(ctx, constant.SystemErr)
+		}
+		if epayType != "" && !selectorMatched && !strings.EqualFold(epayType, "alipay") {
+			return comm.Ctrl.FailJson(ctx, constant.ParamsMarshalErr)
 		}
 		token := strings.TrimSpace(getString(params, "token"))
 		network := strings.TrimSpace(getString(params, "network"))
