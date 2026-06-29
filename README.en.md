@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="./README.en.md">English</a> |
-  <a href="./README.zh-CN.md">简体中文</a>
+  <a href="./README.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -88,10 +88,16 @@ Quick-start links:
 
 | Guide | Description |
 |-------|-------------|
+| [Repo-local: epctl installer](wiki/EPCTL.en.md) | Linux binary install, upgrade, status inspection, and Docker validation |
 | [Docker Deployment](https://epusdt.com/guide/installation/docker) | Recommended one-command setup |
 | [aaPanel Deployment](https://epusdt.com/guide/installation/aapanel) | Great for aaPanel users |
 | [Manual Deployment](https://epusdt.com/guide/installation/manual.html) | Full manual control |
 | [Developer API Docs](https://epusdt.com) | Integration reference |
+
+The repository also ships these top-level scripts:
+
+- [`./epctl`](./epctl) for Linux binary install, upgrade, config inspection, service status, logs, and initial password retrieval
+- [`./epctl-docker-test.sh`](./epctl-docker-test.sh) for real Ubuntu + systemd installation validation inside local Docker
 
 ---
 
@@ -99,6 +105,7 @@ Quick-start links:
 
 ```text
 Epusdt
+├── epctl       Linux binary installation and operations script
 ├── src/        Core project source code
 └── wiki/       Documentation assets and knowledge base
 ```

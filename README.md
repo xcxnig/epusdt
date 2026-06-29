@@ -94,10 +94,16 @@ Epusdt 已完成第三方安全审计。
 
 | 教程 | 说明 |
 |------|------|
+| [仓库内：epctl 安装脚本](wiki/EPCTL.md) | Linux 二进制安装、升级、状态查看与 Docker 验收脚本 |
 | [Docker 部署](https://epusdt.com/guide/installation/docker) | 推荐方式，一键启动 |
 | [宝塔面板部署](https://epusdt.com/guide/installation/aapanel) | 适合宝塔用户 |
 | [手动部署](https://epusdt.com/guide/installation/manual.html) | 完全手动控制 |
 | [开发者 API 文档](https://epusdt.com/zh/guide/integration/gmpay.html) | 接口集成指南 |
+
+仓库内还提供顶层脚本：
+
+- [`./epctl`](./epctl) 用于 Linux 二进制安装、升级、查看配置、状态和初始化密码
+- [`./epctl-docker-test.sh`](./epctl-docker-test.sh) 用于在本机 Docker 里跑 Ubuntu + systemd 的真实安装验收
 
 ---
 
@@ -105,6 +111,7 @@ Epusdt 已完成第三方安全审计。
 
 ```text
 Epusdt
+├── epctl       Linux 二进制安装与运维脚本
 ├── src/        项目核心代码
 └── wiki/       文档与知识库
 ```

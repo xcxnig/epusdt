@@ -1,0 +1,1467 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly EPCTL_NAME="epctl"
+readonly REPO_OWNER="GMWalletApp"
+readonly REPO_NAME="epusdt"
+readonly SERVICE_NAME="epusdt"
+readonly SYSTEM_USER="epusdt"
+readonly INSTALL_DIR="/opt/epusdt"
+readonly BIN_PATH="${INSTALL_DIR}/epusdt"
+readonly CONFIG_PATH="${INSTALL_DIR}/.env"
+readonly CONFIG_EXAMPLE_PATH="${INSTALL_DIR}/.env.example"
+readonly WWW_PATH="${INSTALL_DIR}/www"
+readonly CACHE_ROOT="/tmp/epusdt"
+readonly SYSTEMD_UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+readonly SELF_INSTALL_PATH="/usr/local/bin/${EPCTL_NAME}"
+readonly DEFAULT_APP_URI="http://127.0.0.1:8000"
+readonly DEFAULT_LISTEN="127.0.0.1:8000"
+readonly SCRIPT_SOURCE_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+
+COLOR_RESET=""
+COLOR_BOLD=""
+COLOR_DIM=""
+COLOR_CYAN=""
+COLOR_GREEN=""
+COLOR_YELLOW=""
+COLOR_RED=""
+COLOR_BLUE=""
+
+ACTIVE_LANG=""
+POSITIONAL_ARGS=()
+
+detect_default_language() {
+  local raw normalized
+
+  raw="${EPCTL_LANG:-}"
+  if [[ -z "${raw}" ]]; then
+    printf 'zh\n'
+    return
+  fi
+
+  normalized="${raw,,}"
+  case "${normalized}" in
+    zh|zh-*|zh_*|cn|chs|cht|中文)
+      printf 'zh\n'
+      ;;
+    en|en-*|en_*|english)
+      printf 'en\n'
+      ;;
+    *)
+      printf '%s\n' "${raw}"
+      ;;
+  esac
+}
+
+set_language() {
+  local requested normalized fallback_lang
+
+  requested="${1:-$(detect_default_language)}"
+  normalized="${requested,,}"
+  fallback_lang="${ACTIVE_LANG:-$(detect_default_language)}"
+  case "${normalized}" in
+    zh|zh-*|zh_*|cn|chs|cht|中文)
+      ACTIVE_LANG="zh"
+      ;;
+    en|en-*|en_*|english)
+      ACTIVE_LANG="en"
+      ;;
+    *)
+      ACTIVE_LANG="${fallback_lang}"
+      die "$(trf unsupported_language "${requested}")"
+      ;;
+  esac
+
+  export EPCTL_LANG="${ACTIVE_LANG}"
+}
+
+trf() {
+  local key="$1"
+  shift || true
+  local template
+
+  case "${ACTIVE_LANG}:${key}" in
+    en:label_warn) template='warn' ;;
+    zh:label_warn) template='警告' ;;
+    en:label_ok) template='ok' ;;
+    zh:label_ok) template='完成' ;;
+    en:label_error) template='error' ;;
+    zh:label_error) template='错误' ;;
+    en:only_linux) template='this script only supports Linux' ;;
+    zh:only_linux) template='本脚本仅支持 Linux' ;;
+    en:missing_dependency) template='missing dependency: %s' ;;
+    zh:missing_dependency) template='缺少依赖：%s' ;;
+    en:root_required) template='this command must be run as root' ;;
+    zh:root_required) template='此命令必须以 root 身份执行' ;;
+    en:release_tag_required) template='release tag is required' ;;
+    zh:release_tag_required) template='必须提供 release tag' ;;
+    en:release_tag_invalid) template='--tag must match a release tag such as v1.0.6' ;;
+    zh:release_tag_invalid) template='--tag 必须是有效的 release tag，例如 v1.0.6' ;;
+    en:unsupported_arch) template='unsupported architecture: %s' ;;
+    zh:unsupported_arch) template='不支持的架构：%s' ;;
+    en:checksum_missing) template='checksum entry for %s not found in %s' ;;
+    zh:checksum_missing) template='在 %s 中找不到 %s 的校验项' ;;
+    en:latest_release_resolve_failed) template='failed to resolve the latest release tag from GitHub' ;;
+    zh:latest_release_resolve_failed) template='无法从 GitHub 解析最新 release tag' ;;
+    en:using_latest_without_confirmation) template='using latest release tag %s without confirmation because EPCTL_ASSUME_YES=1' ;;
+    zh:using_latest_without_confirmation) template='检测到 EPCTL_ASSUME_YES=1，直接使用最新 release tag %s，不再二次确认' ;;
+    en:latest_tag_no_tty) template='no --tag provided and no interactive terminal available; pass --tag explicitly or set EPCTL_ASSUME_YES=1' ;;
+    zh:latest_tag_no_tty) template='未提供 --tag，且当前不是交互终端；请显式传入 --tag，或设置 EPCTL_ASSUME_YES=1' ;;
+    en:latest_prompt) template='latest release tag is %s. Continue? [y/N] ' ;;
+    zh:latest_prompt) template='检测到最新 release tag 为 %s，是否继续？[y/N] ' ;;
+    en:cancelled) template='cancelled' ;;
+    zh:cancelled) template='已取消' ;;
+    en:cached_release_files) template='using cached release files in %s' ;;
+    zh:cached_release_files) template='使用缓存中的 release 文件：%s' ;;
+    en:downloading_archive) template='downloading %s' ;;
+    zh:downloading_archive) template='正在下载 %s' ;;
+    en:checksum_skipped) template='sha256sum not found; skipped checksum verification' ;;
+    zh:checksum_skipped) template='未检测到 sha256sum，已跳过校验' ;;
+    en:archive_missing_binary) template='release archive is missing the epusdt binary' ;;
+    zh:archive_missing_binary) template='release 压缩包中缺少 epusdt 二进制文件' ;;
+    en:archive_missing_env_example) template='release archive is missing .env.example' ;;
+    zh:archive_missing_env_example) template='release 压缩包中缺少 .env.example' ;;
+    en:keeping_existing_config) template='keeping existing config at %s' ;;
+    zh:keeping_existing_config) template='保留现有配置文件：%s' ;;
+    en:service_failed_active) template='service %s failed to become active' ;;
+    zh:service_failed_active) template='服务 %s 未能成功进入 active 状态' ;;
+    en:service_installed) template='installed %s to %s from %s' ;;
+    zh:service_installed) template='已将 %s 安装到 %s，来源版本：%s' ;;
+    en:self_install_current) template='%s already points to the current script' ;;
+    zh:self_install_current) template='%s 已经指向当前脚本，无需重复安装' ;;
+    en:self_install_done) template='installed %s into /usr/local/bin' ;;
+    zh:self_install_done) template='已将 %s 安装到 /usr/local/bin' ;;
+    en:config_not_found) template='config file not found: %s' ;;
+    zh:config_not_found) template='找不到配置文件：%s' ;;
+    en:http_listen_not_found) template='http_listen not found in %s' ;;
+    zh:http_listen_not_found) template='在 %s 中找不到 http_listen' ;;
+    en:http_listen_parse_failed) template='failed to parse the port from http_listen=%s' ;;
+    zh:http_listen_parse_failed) template='无法从 http_listen=%s 中解析端口' ;;
+    en:curl_partial_body) template='curl failed and returned a partial response body:' ;;
+    zh:curl_partial_body) template='curl 请求失败，并返回了部分响应体：' ;;
+    en:init_password_http_failed) template='init-password request failed with HTTP %s: %s' ;;
+    zh:init_password_http_failed) template='init-password 请求失败，HTTP %s：%s' ;;
+    en:response_body_label) template='response body:' ;;
+    zh:response_body_label) template='响应体：' ;;
+    en:response_body_empty) template='response body is empty' ;;
+    zh:response_body_empty) template='响应体为空' ;;
+    en:lines_positive_integer) template='--lines must be a positive integer' ;;
+    zh:lines_positive_integer) template='--lines 必须是正整数' ;;
+    en:state_not_installed) template='not installed' ;;
+    zh:state_not_installed) template='未安装' ;;
+    en:state_no_systemctl) template='unit exists, but systemctl is unavailable' ;;
+    zh:state_no_systemctl) template='unit 文件已存在，但 systemctl 不可用' ;;
+    en:state_no_systemd) template='unit exists, but systemd is unavailable' ;;
+    zh:state_no_systemd) template='unit 文件已存在，但 systemd 不可用' ;;
+    en:state_active) template='active' ;;
+    zh:state_active) template='运行中' ;;
+    en:state_inactive) template='installed but inactive' ;;
+    zh:state_inactive) template='已安装，但未运行' ;;
+    en:menu_title) template='EPCTL Console' ;;
+    zh:menu_title) template='EPCTL 控制台' ;;
+    en:menu_subtitle) template='Linux binary manager for epusdt' ;;
+    zh:menu_subtitle) template='面向 epusdt 的 Linux 二进制管理工具' ;;
+    en:label_service) template='service' ;;
+    zh:label_service) template='服务状态' ;;
+    en:label_install_dir) template='install dir' ;;
+    zh:label_install_dir) template='安装目录' ;;
+    en:label_config) template='config' ;;
+    zh:label_config) template='配置文件' ;;
+    en:menu_section_setup) template='Setup and release management' ;;
+    zh:menu_section_setup) template='部署与发布' ;;
+    en:menu_section_runtime) template='Runtime inspection' ;;
+    zh:menu_section_runtime) template='运行查看' ;;
+    en:menu_section_tools) template='Language and help' ;;
+    zh:menu_section_tools) template='语言与帮助' ;;
+    en:menu_badge_direct) template='direct' ;;
+    zh:menu_badge_direct) template='直达' ;;
+    en:menu_badge_confirm) template='confirm' ;;
+    zh:menu_badge_confirm) template='确认' ;;
+    en:menu_exit) template='Quit' ;;
+    zh:menu_exit) template='退出' ;;
+    en:menu_hint_direct) template='Direct items run immediately after selection.' ;;
+    zh:menu_hint_direct) template='带 [直达] 的项目会在选择后直接执行。' ;;
+    en:menu_hint_confirm) template='Confirm items show an extra confirmation step first.' ;;
+    zh:menu_hint_confirm) template='带 [确认] 的项目会先显示确认步骤。' ;;
+    en:command_completed) template='command completed' ;;
+    zh:command_completed) template='命令执行完成' ;;
+    en:command_failed_exit) template='command failed with exit code %s' ;;
+    zh:command_failed_exit) template='命令执行失败，退出码：%s' ;;
+    en:invalid_selection) template='invalid selection: %s' ;;
+    zh:invalid_selection) template='无效选择：%s' ;;
+    en:arg_requires_value) template='%s requires a value' ;;
+    zh:arg_requires_value) template='%s 需要一个参数值' ;;
+    en:unknown_arg) template='unknown argument for %s: %s' ;;
+    zh:unknown_arg) template='%s 命令不支持该参数：%s' ;;
+    en:unknown_command) template='unknown command: %s' ;;
+    zh:unknown_command) template='未知命令：%s' ;;
+    en:input_release_tag) template='Release tag (blank = latest)' ;;
+    zh:input_release_tag) template='Release tag（留空则使用 latest）' ;;
+    en:input_upgrade_tag) template='Upgrade tag (blank = latest)' ;;
+    zh:input_upgrade_tag) template='升级目标 tag（留空则使用 latest）' ;;
+    en:input_app_uri) template='app_uri' ;;
+    zh:input_app_uri) template='app_uri' ;;
+    en:input_http_listen) template='http_listen' ;;
+    zh:input_http_listen) template='http_listen' ;;
+    en:input_log_lines) template='Log lines' ;;
+    zh:input_log_lines) template='日志行数' ;;
+    en:press_enter_continue) template='Press Enter to return to the menu...' ;;
+    zh:press_enter_continue) template='按回车返回菜单...' ;;
+    en:menu_select_action) template='Select an action [0-10]: ' ;;
+    zh:menu_select_action) template='请选择操作 [0-10]：' ;;
+    en:menu_language_prompt) template='Choose a language / 请选择语言: 1) 中文  2) English' ;;
+    zh:menu_language_prompt) template='请选择语言 / Choose a language：1）中文  2）English' ;;
+    en:menu_language_input) template='Language selection（语言选择）' ;;
+    zh:menu_language_input) template='语言选择（Language selection）' ;;
+    en:menu_confirm_prompt) template='Continue? / 是否继续？ [y/N] ' ;;
+    zh:menu_confirm_prompt) template='是否继续？/ Continue? [y/N] ' ;;
+    en:menu_cancelled_back) template='Cancelled and returned to the menu / 已取消，返回菜单' ;;
+    zh:menu_cancelled_back) template='已取消，返回菜单 / Cancelled and returned to the menu' ;;
+    en:language_switched) template='Language switched to %s / 语言已切换为 %s' ;;
+    zh:language_switched) template='语言已切换为 %s / Language switched to %s' ;;
+    en:language_name_zh) template='中文' ;;
+    zh:language_name_zh) template='中文' ;;
+    en:language_name_en) template='English' ;;
+    zh:language_name_en) template='English' ;;
+    en:unsupported_language) template='unsupported language: %s' ;;
+    zh:unsupported_language) template='不支持的语言：%s' ;;
+    en:current_language) template='current language' ;;
+    zh:current_language) template='当前语言' ;;
+    en:base_image_label) template='base image' ;;
+    zh:base_image_label) template='基础镜像' ;;
+    en:action_download_title) template='Download release package' ;;
+    zh:action_download_title) template='下载 release 包' ;;
+    en:action_download_desc) template='This will download the selected GitHub release archive into %s, and verify SHA256 when sha256sum is available. It will not install or start the service.' ;;
+    zh:action_download_desc) template='此操作会把选定的 GitHub release 压缩包下载到 %s，并在本机有 sha256sum 时校验 SHA256。它不会安装，也不会启动服务。' ;;
+    en:action_install_title) template='Install or refresh the service' ;;
+    zh:action_install_title) template='安装或刷新服务' ;;
+    en:action_install_desc) template='This will install epusdt into %s, create or reuse %s, write %s, and enable %s through systemd. Existing .env will be kept.' ;;
+    zh:action_install_desc) template='此操作会把 epusdt 安装到 %s，创建或复用 %s，写入 %s，并通过 systemd 启用 %s。若已有 .env，则会保留。' ;;
+    en:action_upgrade_title) template='Upgrade the service' ;;
+    zh:action_upgrade_title) template='升级服务' ;;
+    en:action_upgrade_desc) template='This will download and install a newer release into %s, then restart %s. The existing .env configuration will be preserved.' ;;
+    zh:action_upgrade_desc) template='此操作会下载并安装较新的 release 到 %s，然后重启 %s。现有 .env 配置会被保留。' ;;
+    en:action_self_install_title) template='Install epctl into PATH' ;;
+    zh:action_self_install_title) template='安装 epctl 到 PATH' ;;
+    en:action_self_install_desc) template='This will install %s into /usr/local/bin so it can be called from anywhere. Use %s to force Chinese or %s to force English.' ;;
+    zh:action_self_install_desc) template='此操作会把 %s 安装到 /usr/local/bin，便于在任意目录直接调用。之后可用 %s 强制中文，或用 %s 强制英文。' ;;
+    en:action_show_config_title) template='Show active config' ;;
+    zh:action_show_config_title) template='查看当前配置' ;;
+    en:action_show_config_desc) template='This will print the full active configuration file %s to the terminal. Sensitive values will be visible.' ;;
+    zh:action_show_config_desc) template='此操作会把当前生效的配置文件 %s 完整输出到终端，其中敏感配置也会直接显示。' ;;
+    en:action_init_password_title) template='Request initial admin password' ;;
+    zh:action_init_password_title) template='获取初始化密码' ;;
+    en:action_init_password_desc) template='This will call the local HTTP route /admin/api/v1/auth/init-password based on http_listen in %s. It does not read the database directly.' ;;
+    zh:action_init_password_desc) template='此操作会根据 %s 中的 http_listen，请求本地 HTTP 路由 /admin/api/v1/auth/init-password。它不会直接读取数据库。' ;;
+    en:action_status_title) template='Show service status' ;;
+    zh:action_status_title) template='查看服务状态' ;;
+    en:action_status_desc) template='This will run systemctl status for %s and print the current runtime state, recent logs, and unit summary.' ;;
+    zh:action_status_desc) template='此操作会对 %s 执行 systemctl status，并输出当前运行状态、最近日志和 unit 摘要。' ;;
+    en:action_logs_title) template='Show recent logs' ;;
+    zh:action_logs_title) template='查看最近日志' ;;
+    en:action_logs_desc) template='This will read recent journal logs for %s. You can choose how many lines to print next.' ;;
+    zh:action_logs_desc) template='此操作会读取 %s 的最近 journal 日志。下一步你可以选择要输出多少行。' ;;
+    en:action_language_title) template='Switch language（切换语言）' ;;
+    zh:action_language_title) template='Switch language（切换语言）' ;;
+    en:action_language_desc) template='This only changes the current interactive interface language. It does not change the service config or installation files. / 此操作只会切换当前交互界面的语言，不会修改服务配置，也不会改动安装文件。' ;;
+    zh:action_language_desc) template='此操作只会切换当前交互界面的语言，不会修改服务配置，也不会改动安装文件。 / This only changes the current interactive interface language. It does not change the service config or installation files.' ;;
+    en:action_help_title) template='Show help' ;;
+    zh:action_help_title) template='查看帮助' ;;
+    en:action_help_desc) template='This will print the full command help, including all non-interactive commands and global options.' ;;
+    zh:action_help_desc) template='此操作会输出完整命令帮助，包括所有非交互命令和全局参数。' ;;
+    *)
+      template="missing translation: ${key}"
+      ;;
+  esac
+
+  printf -- "${template}" "$@"
+}
+
+init_colors() {
+  if [[ -n "${NO_COLOR:-}" || "${EPCTL_NO_COLOR:-}" == "1" ]]; then
+    return
+  fi
+
+  if [[ -t 1 || -t 2 ]]; then
+    COLOR_RESET=$'\033[0m'
+    COLOR_BOLD=$'\033[1m'
+    COLOR_DIM=$'\033[2m'
+    COLOR_CYAN=$'\033[36m'
+    COLOR_GREEN=$'\033[32m'
+    COLOR_YELLOW=$'\033[33m'
+    COLOR_RED=$'\033[31m'
+    COLOR_BLUE=$'\033[34m'
+  fi
+}
+
+log() {
+  printf '%b[%s]%b %s\n' "${COLOR_CYAN}${COLOR_BOLD}" "${EPCTL_NAME}" "${COLOR_RESET}" "$*" >&2
+}
+
+warn() {
+  printf '%b[%s] %s:%b %s\n' "${COLOR_YELLOW}${COLOR_BOLD}" "${EPCTL_NAME}" "$(trf label_warn)" "${COLOR_RESET}" "$*" >&2
+}
+
+success() {
+  printf '%b[%s] %s:%b %s\n' "${COLOR_GREEN}${COLOR_BOLD}" "${EPCTL_NAME}" "$(trf label_ok)" "${COLOR_RESET}" "$*" >&2
+}
+
+die() {
+  printf '%b[%s] %s:%b %s\n' "${COLOR_RED}${COLOR_BOLD}" "${EPCTL_NAME}" "$(trf label_error)" "${COLOR_RESET}" "$*" >&2
+  exit 1
+}
+
+usage() {
+  if [[ "${ACTIVE_LANG}" == "zh" ]]; then
+    cat <<'EOF'
+用法：
+  epctl [--lang zh|en] [--no-color]
+  epctl zh
+  epctl en
+  epctl [--lang zh|en] menu
+  epctl [--lang zh|en] download [--tag <tag>]
+  epctl [--lang zh|en] install [--tag <tag>] [--app-uri URL] [--listen ADDR:PORT]
+  epctl [--lang zh|en] upgrade [--tag <tag>]
+  epctl [--lang zh|en] self-install
+  epctl [--lang zh|en] show-config
+  epctl [--lang zh|en] init-password
+  epctl [--lang zh|en] status
+  epctl [--lang zh|en] logs [--lines N]
+
+全局选项：
+  --lang zh|en    切换界面语言
+  --no-color      禁用彩色输出
+  快捷方式        `epctl zh` 直接进入中文；`epctl en` 直接进入英文
+
+命令说明：
+  menu            进入交互式菜单；直接执行 `epctl` 也会进入
+  download        下载 GitHub Release 包到 /tmp/epusdt/<tag>/
+  install         安装或刷新 /opt/epusdt，并注册 epusdt.service
+  upgrade         升级到新的 release，保留现有 .env
+  self-install    安装 epctl 到 /usr/local/bin
+  show-config     输出当前生效的 /opt/epusdt/.env
+  init-password   通过本地 HTTP 路由请求初始化管理员密码
+  status          显示 epusdt 的 systemd 状态
+  logs            显示最近的服务日志
+
+说明：
+  - 仅支持 Linux
+  - 仅支持二进制安装
+  - install / upgrade / self-install 会写入 /opt、/etc/systemd、/usr/local/bin
+  - 需要提权的命令会自动通过 sudo 重新执行
+  - tag 需要是真实的 GitHub release tag，例如 v1.0.6
+  - 未提供 --tag 时，会自动解析 latest，并要求二次确认
+EOF
+  else
+    cat <<'EOF'
+Usage:
+  epctl [--lang zh|en] [--no-color]
+  epctl zh
+  epctl en
+  epctl [--lang zh|en] menu
+  epctl [--lang zh|en] download [--tag <tag>]
+  epctl [--lang zh|en] install [--tag <tag>] [--app-uri URL] [--listen ADDR:PORT]
+  epctl [--lang zh|en] upgrade [--tag <tag>]
+  epctl [--lang zh|en] self-install
+  epctl [--lang zh|en] show-config
+  epctl [--lang zh|en] init-password
+  epctl [--lang zh|en] status
+  epctl [--lang zh|en] logs [--lines N]
+
+Global options:
+  --lang zh|en    Select the interface language
+  --no-color      Disable colored output
+  Shortcut        `epctl zh` enters Chinese directly; `epctl en` enters English directly
+
+Command summary:
+  menu            Open the interactive menu; `epctl` with no arguments does this too
+  download        Download a GitHub release archive into /tmp/epusdt/<tag>/
+  install         Install or refresh /opt/epusdt and register epusdt.service
+  upgrade         Upgrade to a newer release while keeping the existing .env
+  self-install    Install epctl into /usr/local/bin
+  show-config     Print the active /opt/epusdt/.env file
+  init-password   Request the initial admin password from the local HTTP route
+  status          Show the systemd status of epusdt
+  logs            Show recent service logs
+
+Notes:
+  - Linux only
+  - Binary installation only
+  - install / upgrade / self-install write into /opt, /etc/systemd, and /usr/local/bin
+  - privileged commands automatically re-exec through sudo
+  - tags must match real GitHub release tags such as v1.0.6
+  - if --tag is omitted, epctl resolves the latest release and asks for confirmation
+EOF
+  fi
+}
+
+parse_global_options() {
+  POSITIONAL_ARGS=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lang)
+        [[ $# -ge 2 ]] || die "$(trf arg_requires_value "--lang")"
+        set_language "$2"
+        shift 2
+        ;;
+      --lang=*)
+        set_language "${1#*=}"
+        shift
+        ;;
+      --no-color)
+        export EPCTL_NO_COLOR=1
+        shift
+        ;;
+      *)
+        POSITIONAL_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+require_linux() {
+  [[ "$(uname -s)" == "Linux" ]] || die "$(trf only_linux)"
+}
+
+have_command() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+require_command() {
+  have_command "$1" || die "$(trf missing_dependency "$1")"
+}
+
+is_interactive_terminal() {
+  [[ -t 0 && -t 1 ]]
+}
+
+require_root() {
+  [[ "${EUID}" -eq 0 ]] || die "$(trf root_required)"
+}
+
+ensure_root_via_sudo() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    return
+  fi
+
+  require_command sudo
+  exec sudo -- "${SCRIPT_SOURCE_PATH}" --lang "${ACTIVE_LANG}" "$@"
+}
+
+require_release_tag() {
+  local tag="$1"
+  [[ -n "${tag}" ]] || die "$(trf release_tag_required)"
+  [[ "${tag}" == v* ]] || die "$(trf release_tag_invalid)"
+}
+
+map_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)
+      printf 'amd64\n'
+      ;;
+    aarch64|arm64)
+      printf 'arm64\n'
+      ;;
+    *)
+      die "$(trf unsupported_arch "$(uname -m)")"
+      ;;
+  esac
+}
+
+asset_version_from_tag() {
+  local tag="$1"
+  printf '%s\n' "${tag#v}"
+}
+
+cache_dir_for_tag() {
+  local tag="$1"
+  printf '%s/%s\n' "${CACHE_ROOT}" "${tag}"
+}
+
+archive_name_for_tag() {
+  local tag="$1"
+  local arch="$2"
+  printf 'epusdt-%s-linux-%s.tar.gz\n' "$(asset_version_from_tag "${tag}")" "${arch}"
+}
+
+release_base_url_for_tag() {
+  local tag="$1"
+  printf 'https://github.com/%s/%s/releases/download/%s\n' "${REPO_OWNER}" "${REPO_NAME}" "${tag}"
+}
+
+download_file() {
+  local url="$1"
+  local destination="$2"
+  local partial="${destination}.part"
+  rm -f "${partial}"
+  curl --fail --location --silent --show-error --output "${partial}" "${url}"
+  mv "${partial}" "${destination}"
+}
+
+verify_checksum() {
+  local sums_path="$1"
+  local archive_path="$2"
+  local archive_name
+  local checksum_line
+
+  archive_name="$(basename "${archive_path}")"
+  checksum_line="$(grep -F "  ${archive_name}" "${sums_path}" || true)"
+  [[ -n "${checksum_line}" ]] || die "$(trf checksum_missing "${archive_name}" "$(basename "${sums_path}")")"
+
+  (
+    cd "$(dirname "${archive_path}")"
+    printf '%s\n' "${checksum_line}" | sha256sum -c - >&2
+  )
+}
+
+ensure_download_dependencies() {
+  require_command curl
+  require_command grep
+  require_command sed
+}
+
+latest_release_tag() {
+  local api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+  local response tag
+
+  ensure_download_dependencies
+  response="$(curl --fail --location --silent --show-error "${api_url}")"
+  tag="$(printf '%s\n' "${response}" | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]\+\)".*$/\1/p' | head -n 1)"
+  [[ -n "${tag}" ]] || die "$(trf latest_release_resolve_failed)"
+  require_release_tag "${tag}"
+  printf '%s\n' "${tag}"
+}
+
+is_affirmative_reply() {
+  local reply="${1:-}"
+  reply="${reply,,}"
+
+  case "${reply}" in
+    y|yes|ok|true|1|s|shi|是|确认|確認)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+confirm_latest_release_tag() {
+  local tag="$1"
+  local reply
+
+  if [[ "${EPCTL_ASSUME_YES:-}" == "1" ]]; then
+    log "$(trf using_latest_without_confirmation "${tag}")"
+    printf '%s\n' "${tag}"
+    return
+  fi
+
+  if [[ ! -t 0 ]]; then
+    die "$(trf latest_tag_no_tty)"
+  fi
+
+  printf '%b[%s]%b %s' "${COLOR_CYAN}${COLOR_BOLD}" "${EPCTL_NAME}" "${COLOR_RESET}" "$(trf latest_prompt "${tag}")" >&2
+  read -r reply
+  if is_affirmative_reply "${reply}"; then
+    printf '%s\n' "${tag}"
+    return
+  fi
+
+  die "$(trf cancelled)"
+}
+
+resolve_effective_tag() {
+  local requested_tag="$1"
+  local latest_tag
+
+  if [[ -n "${requested_tag}" ]]; then
+    require_release_tag "${requested_tag}"
+    printf '%s\n' "${requested_tag}"
+    return
+  fi
+
+  latest_tag="$(latest_release_tag)"
+  confirm_latest_release_tag "${latest_tag}"
+}
+
+download_release() {
+  local tag="$1"
+  local arch archive_name release_base_url cache_dir archive_path sums_path
+
+  require_linux
+  ensure_download_dependencies
+
+  arch="$(map_arch)"
+  archive_name="$(archive_name_for_tag "${tag}" "${arch}")"
+  release_base_url="$(release_base_url_for_tag "${tag}")"
+  cache_dir="$(cache_dir_for_tag "${tag}")"
+  archive_path="${cache_dir}/${archive_name}"
+  sums_path="${cache_dir}/SHA256SUMS"
+
+  mkdir -p "${cache_dir}"
+
+  if [[ -f "${archive_path}" && -f "${sums_path}" ]]; then
+    log "$(trf cached_release_files "${cache_dir}")"
+  else
+    log "$(trf downloading_archive "${archive_name}")"
+    download_file "${release_base_url}/${archive_name}" "${archive_path}"
+    download_file "${release_base_url}/SHA256SUMS" "${sums_path}"
+  fi
+
+  if have_command sha256sum; then
+    verify_checksum "${sums_path}" "${archive_path}"
+  else
+    warn "$(trf checksum_skipped)"
+  fi
+
+  printf '%s\n' "${archive_path}"
+}
+
+escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'
+}
+
+set_env_key() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local escaped
+
+  escaped="$(escape_sed_replacement "${value}")"
+  if grep -q "^${key}=" "${file}"; then
+    sed -i "s|^${key}=.*$|${key}=${escaped}|" "${file}"
+  else
+    printf '%s=%s\n' "${key}" "${value}" >> "${file}"
+  fi
+}
+
+ensure_system_user() {
+  if ! getent group "${SYSTEM_USER}" >/dev/null 2>&1; then
+    groupadd --system "${SYSTEM_USER}"
+  fi
+  if ! id -u "${SYSTEM_USER}" >/dev/null 2>&1; then
+    useradd --system --gid "${SYSTEM_USER}" --home-dir "${INSTALL_DIR}" --shell /usr/sbin/nologin "${SYSTEM_USER}"
+  fi
+}
+
+extract_release_archive() {
+  local tag="$1"
+  local archive_path="$2"
+  local extract_dir
+
+  extract_dir="$(cache_dir_for_tag "${tag}")/extract"
+  rm -rf "${extract_dir}"
+  mkdir -p "${extract_dir}"
+  tar -xzf "${archive_path}" -C "${extract_dir}"
+  [[ -f "${extract_dir}/epusdt" ]] || die "$(trf archive_missing_binary)"
+  [[ -f "${extract_dir}/.env.example" ]] || die "$(trf archive_missing_env_example)"
+  printf '%s\n' "${extract_dir}"
+}
+
+create_default_config_if_missing() {
+  local app_uri="$1"
+  local listen="$2"
+
+  if [[ -f "${CONFIG_PATH}" ]]; then
+    log "$(trf keeping_existing_config "${CONFIG_PATH}")"
+    return
+  fi
+
+  cp "${CONFIG_EXAMPLE_PATH}" "${CONFIG_PATH}"
+  set_env_key "${CONFIG_PATH}" "install" "false"
+  set_env_key "${CONFIG_PATH}" "app_uri" "${app_uri}"
+  set_env_key "${CONFIG_PATH}" "http_listen" "${listen}"
+  chmod 0644 "${CONFIG_PATH}"
+}
+
+write_systemd_unit() {
+  cat > "${SYSTEMD_UNIT_PATH}" <<EOF
+[Unit]
+Description=epusdt service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SYSTEM_USER}
+Group=${SYSTEM_USER}
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${BIN_PATH} http start
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+render_service_debug_info() {
+  systemctl status "${SERVICE_NAME}" --no-pager || true
+  journalctl -u "${SERVICE_NAME}" --no-pager -n 100 || true
+}
+
+command_download() {
+  local tag=""
+  local effective_tag archive_path
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --tag)
+        [[ $# -ge 2 ]] || die "$(trf arg_requires_value "--tag")"
+        tag="$2"
+        shift 2
+        ;;
+      --tag=*)
+        tag="${1#*=}"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "$(trf unknown_arg "download" "$1")"
+        ;;
+    esac
+  done
+
+  effective_tag="$(resolve_effective_tag "${tag}")"
+  archive_path="$(download_release "${effective_tag}")"
+  printf '%s\n' "${archive_path}"
+}
+
+command_install() {
+  local tag=""
+  local app_uri="${DEFAULT_APP_URI}"
+  local listen="${DEFAULT_LISTEN}"
+  local original_args=("$@")
+  local effective_tag archive_path extract_dir
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --tag)
+        [[ $# -ge 2 ]] || die "$(trf arg_requires_value "--tag")"
+        tag="$2"
+        shift 2
+        ;;
+      --tag=*)
+        tag="${1#*=}"
+        shift
+        ;;
+      --app-uri)
+        [[ $# -ge 2 ]] || die "$(trf arg_requires_value "--app-uri")"
+        app_uri="$2"
+        shift 2
+        ;;
+      --app-uri=*)
+        app_uri="${1#*=}"
+        shift
+        ;;
+      --listen)
+        [[ $# -ge 2 ]] || die "$(trf arg_requires_value "--listen")"
+        listen="$2"
+        shift 2
+        ;;
+      --listen=*)
+        listen="${1#*=}"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "$(trf unknown_arg "install" "$1")"
+        ;;
+    esac
+  done
+
+  ensure_root_via_sudo install "${original_args[@]}"
+
+  require_root
+  require_linux
+  require_command tar
+  require_command install
+  require_command systemctl
+  require_command grep
+  require_command sed
+  require_command getent
+  require_command groupadd
+  require_command useradd
+  require_command chown
+
+  effective_tag="$(resolve_effective_tag "${tag}")"
+  archive_path="$(download_release "${effective_tag}")"
+  extract_dir="$(extract_release_archive "${effective_tag}" "${archive_path}")"
+
+  ensure_system_user
+  install -d -m 0755 "${INSTALL_DIR}"
+  install -m 0755 "${extract_dir}/epusdt" "${BIN_PATH}"
+  install -m 0644 "${extract_dir}/.env.example" "${CONFIG_EXAMPLE_PATH}"
+  create_default_config_if_missing "${app_uri}" "${listen}"
+  chown -R "${SYSTEM_USER}:${SYSTEM_USER}" "${INSTALL_DIR}"
+
+  write_systemd_unit
+  systemctl daemon-reload
+  systemctl enable --now "${SERVICE_NAME}"
+
+  if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
+    render_service_debug_info
+    die "$(trf service_failed_active "${SERVICE_NAME}")"
+  fi
+
+  log "$(trf service_installed "${SERVICE_NAME}" "${INSTALL_DIR}" "${effective_tag}")"
+}
+
+command_self_install() {
+  local original_args=("$@")
+
+  require_linux
+  require_command install
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "$(trf unknown_arg "self-install" "$1")"
+        ;;
+    esac
+  done
+
+  ensure_root_via_sudo self-install "${original_args[@]}"
+
+  if [[ "${SCRIPT_SOURCE_PATH}" == "${SELF_INSTALL_PATH}" ]]; then
+    chmod 0755 "${SELF_INSTALL_PATH}"
+    log "$(trf self_install_current "${SELF_INSTALL_PATH}")"
+  else
+    install -m 0755 "${SCRIPT_SOURCE_PATH}" "${SELF_INSTALL_PATH}"
+  fi
+
+  log "$(trf self_install_done "${EPCTL_NAME}")"
+}
+
+command_upgrade() {
+  local original_args=("$@")
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --tag|--app-uri|--listen)
+        [[ $# -ge 2 ]] || die "$(trf arg_requires_value "$1")"
+        shift 2
+        ;;
+      --tag=*|--app-uri=*|--listen=*)
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "$(trf unknown_arg "upgrade" "$1")"
+        ;;
+    esac
+  done
+
+  ensure_root_via_sudo upgrade "${original_args[@]}"
+  command_install "${original_args[@]}"
+}
+
+command_show_config() {
+  require_linux
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "$(trf unknown_arg "show-config" "$1")"
+        ;;
+    esac
+  done
+  [[ -f "${CONFIG_PATH}" ]] || die "$(trf config_not_found "${CONFIG_PATH}")"
+  cat "${CONFIG_PATH}"
+}
+
+resolve_http_listen() {
+  [[ -f "${CONFIG_PATH}" ]] || die "$(trf config_not_found "${CONFIG_PATH}")"
+  local listen
+
+  listen="$(grep -E '^http_listen=' "${CONFIG_PATH}" | tail -n 1 | cut -d'=' -f2- || true)"
+  [[ -n "${listen}" ]] || die "$(trf http_listen_not_found "${CONFIG_PATH}")"
+  printf '%s\n' "${listen}"
+}
+
+init_password_url() {
+  local listen="$1"
+  local host port
+
+  if [[ "${listen}" =~ ^\[([^]]+)\]:(.+)$ ]]; then
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+  elif [[ "${listen}" == :* ]]; then
+    host="127.0.0.1"
+    port="${listen#:}"
+  else
+    host="${listen%:*}"
+    port="${listen##*:}"
+  fi
+
+  case "${host}" in
+    ""|"0.0.0.0"|"::"|"[::]")
+      host="127.0.0.1"
+      ;;
+  esac
+
+  [[ -n "${port}" ]] || die "$(trf http_listen_parse_failed "${listen}")"
+  printf 'http://%s:%s/admin/api/v1/auth/init-password\n' "${host}" "${port}"
+}
+
+command_init_password() {
+  local listen url body_file http_code curl_rc
+
+  require_linux
+  require_command curl
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "$(trf unknown_arg "init-password" "$1")"
+        ;;
+    esac
+  done
+  listen="$(resolve_http_listen)"
+  url="$(init_password_url "${listen}")"
+  body_file="$(mktemp)"
+  if http_code="$(curl --silent --show-error --location --output "${body_file}" --write-out '%{http_code}' "${url}")"; then
+    :
+  else
+    curl_rc="$?"
+    if [[ -s "${body_file}" ]]; then
+      warn "$(trf curl_partial_body)"
+      cat "${body_file}" >&2
+      printf '\n' >&2
+    fi
+    rm -f "${body_file}"
+    return "${curl_rc}"
+  fi
+
+  if [[ "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
+    cat "${body_file}"
+    rm -f "${body_file}"
+    return 0
+  fi
+
+  warn "$(trf init_password_http_failed "${http_code}" "${url}")"
+  if [[ -s "${body_file}" ]]; then
+    printf '%b%s%b\n' "${COLOR_YELLOW}${COLOR_BOLD}" "$(trf response_body_label)" "${COLOR_RESET}" >&2
+    cat "${body_file}" >&2
+    printf '\n' >&2
+  else
+    warn "$(trf response_body_empty)"
+  fi
+  rm -f "${body_file}"
+  return 1
+}
+
+command_status() {
+  local original_args=("$@")
+
+  require_linux
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "$(trf unknown_arg "status" "$1")"
+        ;;
+    esac
+  done
+
+  ensure_root_via_sudo status "${original_args[@]}"
+  require_root
+  require_command systemctl
+  systemctl status "${SERVICE_NAME}" --no-pager
+}
+
+command_logs() {
+  local lines="100"
+  local original_args=("$@")
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lines)
+        [[ $# -ge 2 ]] || die "$(trf arg_requires_value "--lines")"
+        lines="$2"
+        shift 2
+        ;;
+      --lines=*)
+        lines="${1#*=}"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "$(trf unknown_arg "logs" "$1")"
+        ;;
+    esac
+  done
+
+  [[ "${lines}" =~ ^[1-9][0-9]*$ ]] || die "$(trf lines_positive_integer)"
+  require_linux
+  ensure_root_via_sudo logs "${original_args[@]}"
+  require_root
+  require_command journalctl
+  journalctl -u "${SERVICE_NAME}" --no-pager -q -n "${lines}"
+}
+
+prompt_input() {
+  local label="$1"
+  local default_value="${2:-}"
+  local input
+
+  if [[ -n "${default_value}" ]]; then
+    printf '%b%s%b [%s]: ' "${COLOR_BOLD}" "${label}" "${COLOR_RESET}" "${default_value}" >&2
+  else
+    printf '%b%s%b: ' "${COLOR_BOLD}" "${label}" "${COLOR_RESET}" >&2
+  fi
+
+  read -r input || return 1
+  if [[ -z "${input}" ]]; then
+    printf '%s\n' "${default_value}"
+  else
+    printf '%s\n' "${input}"
+  fi
+}
+
+pause_for_menu() {
+  printf '\n'
+  printf '%b%s%b' "${COLOR_DIM}" "$(trf press_enter_continue)" "${COLOR_RESET}"
+  read -r _ || true
+}
+
+print_rule() {
+  local char="${1:--}"
+  local width="${2:-64}"
+  local line
+
+  printf -v line '%*s' "${width}" ''
+  line="${line// /${char}}"
+  printf '%b%s%b\n' "${COLOR_DIM}" "${line}" "${COLOR_RESET}"
+}
+
+format_badge() {
+  local text="$1"
+  local color="${2:-${COLOR_BLUE}}"
+  printf '%b[%s]%b' "${color}${COLOR_BOLD}" "${text}" "${COLOR_RESET}"
+}
+
+format_service_state_badge() {
+  local state="$1"
+  local color="${COLOR_RED}"
+
+  case "${state}" in
+    "$(trf state_active)")
+      color="${COLOR_GREEN}"
+      ;;
+    "$(trf state_inactive)")
+      color="${COLOR_YELLOW}"
+      ;;
+  esac
+
+  format_badge "${state}" "${color}"
+}
+
+format_menu_item_badge() {
+  local kind="$1"
+  local label color
+
+  case "${kind}" in
+    direct)
+      label="$(trf menu_badge_direct)"
+      color="${COLOR_GREEN}"
+      ;;
+    confirm)
+      label="$(trf menu_badge_confirm)"
+      color="${COLOR_YELLOW}"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  format_badge "${label}" "${color}"
+}
+
+print_menu_meta_line() {
+  local label="$1"
+  local value="$2"
+  printf '  %b%s%b %s\n' "${COLOR_DIM}" "${label}:" "${COLOR_RESET}" "${value}"
+}
+
+print_menu_section_title() {
+  printf '\n%b%s%b\n' "${COLOR_BLUE}${COLOR_BOLD}" "$1" "${COLOR_RESET}"
+}
+
+print_menu_item() {
+  local index="$1"
+  local title="$2"
+  local mode="${3:-}"
+
+  printf '  %b%2s%b. %s' "${COLOR_CYAN}${COLOR_BOLD}" "${index}" "${COLOR_RESET}" "${title}"
+  if [[ -n "${mode}" ]]; then
+    printf '  %s' "$(format_menu_item_badge "${mode}")"
+  fi
+  printf '\n'
+}
+
+print_menu_action_preview() {
+  local title="$1"
+  local description="$2"
+
+  printf '\n' >&2
+  print_rule "-" 64 >&2
+  printf '%b> %s%b\n' "${COLOR_BLUE}${COLOR_BOLD}" "${title}" "${COLOR_RESET}" >&2
+  printf '%s\n' "${description}" >&2
+  print_rule "-" 64 >&2
+}
+
+confirm_menu_action() {
+  local title="$1"
+  local description="$2"
+  local reply
+
+  print_menu_action_preview "${title}" "${description}"
+  printf '%b%s%b' "${COLOR_BOLD}" "$(trf menu_confirm_prompt)" "${COLOR_RESET}" >&2
+  read -r reply || return 1
+  if is_affirmative_reply "${reply}"; then
+    return 0
+  fi
+
+  warn "$(trf menu_cancelled_back)"
+  pause_for_menu
+  return 1
+}
+
+service_state_summary() {
+  if [[ ! -f "${SYSTEMD_UNIT_PATH}" ]]; then
+    printf '%s\n' "$(trf state_not_installed)"
+    return
+  fi
+
+  if ! have_command systemctl; then
+    printf '%s\n' "$(trf state_no_systemctl)"
+    return
+  fi
+
+  if [[ ! -d /run/systemd/system ]]; then
+    printf '%s\n' "$(trf state_no_systemd)"
+    return
+  fi
+
+  if systemctl is-active --quiet "${SERVICE_NAME}" >/dev/null 2>&1; then
+    printf '%s\n' "$(trf state_active)"
+    return
+  fi
+
+  printf '%s\n' "$(trf state_inactive)"
+}
+
+print_menu_header() {
+  local current_lang_label service_state
+
+  if [[ "${ACTIVE_LANG}" == "zh" ]]; then
+    current_lang_label="$(trf language_name_zh)"
+  else
+    current_lang_label="$(trf language_name_en)"
+  fi
+
+  service_state="$(service_state_summary)"
+
+  printf '\n'
+  print_rule "=" 64
+  printf '%b%s%b\n' "${COLOR_CYAN}${COLOR_BOLD}" "$(trf menu_title)" "${COLOR_RESET}"
+  printf '%b%s%b\n' "${COLOR_DIM}" "$(trf menu_subtitle)" "${COLOR_RESET}"
+  print_rule "-" 64
+  print_menu_meta_line "$(trf label_service)" "$(format_service_state_badge "${service_state}")"
+  print_menu_meta_line "$(trf label_install_dir)" "${INSTALL_DIR}"
+  print_menu_meta_line "$(trf label_config)" "${CONFIG_PATH}"
+  print_menu_meta_line "$(trf current_language)" "$(format_badge "${current_lang_label}" "${COLOR_CYAN}")"
+  print_rule "-" 64
+}
+
+print_menu_options() {
+  print_menu_section_title "$(trf menu_section_setup)"
+  print_menu_item "1" "$(trf action_download_title)" "confirm"
+  print_menu_item "2" "$(trf action_install_title)" "confirm"
+  print_menu_item "3" "$(trf action_upgrade_title)" "confirm"
+  print_menu_item "4" "$(trf action_self_install_title)" "confirm"
+
+  print_menu_section_title "$(trf menu_section_runtime)"
+  print_menu_item "5" "$(trf action_show_config_title)" "direct"
+  print_menu_item "6" "$(trf action_init_password_title)" "confirm"
+  print_menu_item "7" "$(trf action_status_title)" "direct"
+  print_menu_item "8" "$(trf action_logs_title)" "direct"
+
+  print_menu_section_title "$(trf menu_section_tools)"
+  print_menu_item "9" "$(trf action_language_title)" "direct"
+  print_menu_item "10" "$(trf action_help_title)" "direct"
+  print_menu_item "0" "$(trf menu_exit)"
+
+  print_rule "-" 64
+  printf '%b%s%b\n' "${COLOR_DIM}" "$(trf menu_hint_direct)" "${COLOR_RESET}"
+  printf '%b%s%b\n' "${COLOR_DIM}" "$(trf menu_hint_confirm)" "${COLOR_RESET}"
+}
+
+run_menu_command() {
+  local rc
+
+  printf '\n'
+  if EPCTL_LANG="${ACTIVE_LANG}" "${SCRIPT_SOURCE_PATH}" --lang "${ACTIVE_LANG}" "$@"; then
+    success "$(trf command_completed)"
+  else
+    rc="$?"
+    warn "$(trf command_failed_exit "${rc}")"
+  fi
+
+  pause_for_menu
+}
+
+interactive_download() {
+  local tag
+
+  confirm_menu_action \
+    "$(trf action_download_title)" \
+    "$(trf action_download_desc "${CACHE_ROOT}")" || return 0
+
+  tag="$(prompt_input "$(trf input_release_tag)")" || return 0
+  if [[ -n "${tag}" ]]; then
+    run_menu_command download --tag "${tag}"
+  else
+    run_menu_command download
+  fi
+}
+
+interactive_install() {
+  local tag app_uri listen
+
+  confirm_menu_action \
+    "$(trf action_install_title)" \
+    "$(trf action_install_desc "${INSTALL_DIR}" "${SYSTEM_USER}" "${SYSTEMD_UNIT_PATH}" "${SERVICE_NAME}")" || return 0
+
+  tag="$(prompt_input "$(trf input_release_tag)")" || return 0
+  app_uri="$(prompt_input "$(trf input_app_uri)" "${DEFAULT_APP_URI}")" || return 0
+  listen="$(prompt_input "$(trf input_http_listen)" "${DEFAULT_LISTEN}")" || return 0
+
+  if [[ -n "${tag}" ]]; then
+    run_menu_command install --tag "${tag}" --app-uri "${app_uri}" --listen "${listen}"
+  else
+    run_menu_command install --app-uri "${app_uri}" --listen "${listen}"
+  fi
+}
+
+interactive_upgrade() {
+  local tag
+
+  confirm_menu_action \
+    "$(trf action_upgrade_title)" \
+    "$(trf action_upgrade_desc "${INSTALL_DIR}" "${SERVICE_NAME}")" || return 0
+
+  tag="$(prompt_input "$(trf input_upgrade_tag)")" || return 0
+  if [[ -n "${tag}" ]]; then
+    run_menu_command upgrade --tag "${tag}"
+  else
+    run_menu_command upgrade
+  fi
+}
+
+interactive_logs() {
+  local lines
+
+  print_menu_action_preview \
+    "$(trf action_logs_title)" \
+    "$(trf action_logs_desc "${SERVICE_NAME}")"
+
+  lines="$(prompt_input "$(trf input_log_lines)" "100")" || return 0
+  run_menu_command logs --lines "${lines}"
+}
+
+interactive_switch_language() {
+  local choice
+
+  print_menu_action_preview \
+    "$(trf action_language_title)" \
+    "$(trf action_language_desc)"
+
+  printf '\n%b%s%b\n' "${COLOR_BOLD}" "$(trf menu_language_prompt)" "${COLOR_RESET}"
+  choice="$(prompt_input "$(trf menu_language_input)")" || return 0
+  case "${choice}" in
+    1|zh|ZH|cn|CN|中文)
+      set_language "zh"
+      success "$(trf language_switched "$(trf language_name_zh)" "$(trf language_name_zh)")"
+      ;;
+    2|en|EN|english|English|英文|英语)
+      set_language "en"
+      success "$(trf language_switched "$(trf language_name_en)" "$(trf language_name_en)")"
+      ;;
+    *)
+      warn "$(trf invalid_selection "${choice}")"
+      ;;
+  esac
+  pause_for_menu
+}
+
+interactive_menu() {
+  local choice
+
+  require_linux
+  while true; do
+    print_menu_header
+    print_menu_options
+    printf '%b%s%b' "${COLOR_BOLD}" "$(trf menu_select_action)" "${COLOR_RESET}"
+    read -r choice || return 0
+
+    case "${choice}" in
+      1)
+        interactive_download
+        ;;
+      2)
+        interactive_install
+        ;;
+      3)
+        interactive_upgrade
+        ;;
+      4)
+        if confirm_menu_action \
+          "$(trf action_self_install_title)" \
+          "$(trf action_self_install_desc "${EPCTL_NAME}" "${EPCTL_NAME} --lang zh" "${EPCTL_NAME} --lang en")"; then
+          run_menu_command self-install
+        fi
+        ;;
+      5)
+        print_menu_action_preview \
+          "$(trf action_show_config_title)" \
+          "$(trf action_show_config_desc "${CONFIG_PATH}")"
+        run_menu_command show-config
+        ;;
+      6)
+        if confirm_menu_action \
+          "$(trf action_init_password_title)" \
+          "$(trf action_init_password_desc "${CONFIG_PATH}")"; then
+          run_menu_command init-password
+        fi
+        ;;
+      7)
+        print_menu_action_preview \
+          "$(trf action_status_title)" \
+          "$(trf action_status_desc "${SERVICE_NAME}")"
+        run_menu_command status
+        ;;
+      8)
+        interactive_logs
+        ;;
+      9)
+        interactive_switch_language
+        ;;
+      10)
+        print_menu_action_preview \
+          "$(trf action_help_title)" \
+          "$(trf action_help_desc)"
+        usage
+        pause_for_menu
+        ;;
+      0|q|Q|quit|QUIT|exit|EXIT)
+        return 0
+        ;;
+      *)
+        warn "$(trf invalid_selection "${choice}")"
+        pause_for_menu
+        ;;
+    esac
+  done
+}
+
+main() {
+  local command="${1:-}"
+  shift || true
+
+  case "${command}" in
+    zh|zh-cn|zh_cn|cn|中文)
+      set_language "zh"
+      if [[ $# -gt 0 ]]; then
+        main "$@"
+      elif is_interactive_terminal; then
+        interactive_menu
+      else
+        usage
+      fi
+      ;;
+    en|en-us|en_us|english)
+      set_language "en"
+      if [[ $# -gt 0 ]]; then
+        main "$@"
+      elif is_interactive_terminal; then
+        interactive_menu
+      else
+        usage
+      fi
+      ;;
+    menu|interactive)
+      interactive_menu
+      ;;
+    download)
+      command_download "$@"
+      ;;
+    install)
+      command_install "$@"
+      ;;
+    upgrade)
+      command_upgrade "$@"
+      ;;
+    self-install)
+      command_self_install "$@"
+      ;;
+    show-config)
+      command_show_config "$@"
+      ;;
+    init-password)
+      command_init_password "$@"
+      ;;
+    status)
+      command_status "$@"
+      ;;
+    logs)
+      command_logs "$@"
+      ;;
+    -h|--help|help)
+      usage
+      ;;
+    "")
+      if is_interactive_terminal; then
+        interactive_menu
+      else
+        usage
+        exit 1
+      fi
+      ;;
+    *)
+      die "$(trf unknown_command "${command}")"
+      ;;
+  esac
+}
+
+set_language ""
+parse_global_options "$@"
+init_colors
+main "${POSITIONAL_ARGS[@]}"
