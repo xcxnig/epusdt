@@ -1,1 +1,0 @@
-import{t as e}from"./general-error-BoAB2alm.js";var t=e;export{t as component};
